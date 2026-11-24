@@ -1,5 +1,5 @@
-const CACHE = '9router-web-v2';
-const ASSETS = ['./', './index.html', './css/styles.css', './js/app.js', './js/store.js', './js/router.js', './js/markdown.js', './js/providers_ui.js', './js/combo_graph.js', './js/agent_team.js'];
+const CACHE = '9router-web-v3';
+const ASSETS = ['./', './index.html', './css/styles.css', './js/app.js', './js/store.js', './js/router.js', './js/markdown.js', './js/providers_ui.js', './js/combo_graph.js', './js/agent_team.js', './js/arena.js'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).catch(() => {}));

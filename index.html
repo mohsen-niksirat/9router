@@ -27,6 +27,7 @@
     <button class="nav-item" data-tab="providers">🔑 ارائه‌دهنده‌ها و کلیدها</button>
     <button class="nav-item" data-tab="combos">🔀 کمبو گرافیکی (نودها)</button>
     <button class="nav-item" data-tab="team">🤖 تیم ایجنت‌ها (Swarm)</button>
+    <button class="nav-item" data-tab="arena">⚔️ مقایسه مدل‌ها (Arena)</button>
 
     <div class="sessions-head">تاریخچه گفتگوها</div>
     <input id="ses-search" class="hub-search" style="min-width:0;width:100%;padding:6px 10px;font-size:12.5px;margin-bottom:4px" placeholder="جستجو در گفتگوها...">
@@ -63,6 +64,7 @@
 
       <div class="composer-wrap">
         <div class="composer">
+          <div class="slash-menu" id="slash-menu"></div>
           <div class="composer-previews" id="composer-previews"></div>
           <div class="composer-row">
             <button class="icon-btn" id="btn-attach" title="پیوست تصویر یا فایل کد">📎</button>
@@ -89,6 +91,11 @@
     <!-- Visual Multi-Agent Team Orchestrator -->
     <section class="view" id="view-team">
       <div style="display:flex;flex-direction:column;flex:1;min-height:0" id="team-mount"></div>
+    </section>
+
+    <!-- Side-by-Side Arena -->
+    <section class="view" id="view-arena">
+      <div style="display:flex;flex-direction:column;flex:1;min-height:0" id="arena-mount"></div>
     </section>
   </main>
 </div>

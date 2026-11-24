@@ -9,6 +9,7 @@ import { runChatCompletion, runImageGeneration } from './router.js';
 import { renderProvidersHub } from './providers_ui.js';
 import { renderComboGraph } from './combo_graph.js';
 import { renderAgentTeam } from './agent_team.js';
+import { renderArena } from './arena.js';
 
 let currentTab = 'chat';
 let attachedImages = [];
@@ -315,6 +316,8 @@ function switchTab(tab) {
     });
   } else if (tab === 'team') {
     renderAgentTeam(document.getElementById('team-mount'), { onToast: toast });
+  } else if (tab === 'arena') {
+    renderArena(document.getElementById('arena-mount'), { onToast: toast });
   }
 }
 
@@ -435,9 +438,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('send-btn').addEventListener('click', handleSend);
   const msgInput = document.getElementById('msg-input');
+  const slashMenu = document.getElementById('slash-menu');
   msgInput.addEventListener('input', () => {
     msgInput.style.height = 'auto';
     msgInput.style.height = `${Math.min(msgInput.scrollHeight, 160)}px`;
+    if (slashMenu && msgInput.value.startsWith('/')) {
+      const q = msgInput.value.slice(1).toLowerCase();
+      const matches = (store.state.prompts || []).filter((p) => p.title.toLowerCase().includes(q));
+      if (matches.length) {
+        slashMenu.innerHTML = matches
+          .map((p) => `<button class="slash-item" type="button" data-prompt-text="${escHtml(p.text)}"><b>/${escHtml(p.title)}</b><span>${escHtml(p.text)}</span></button>`)
+          .join('');
+        slashMenu.classList.add('show');
+        slashMenu.querySelectorAll('.slash-item').forEach((b) => {
+          b.addEventListener('click', () => {
+            msgInput.value = b.dataset.promptText + ' ';
+            slashMenu.classList.remove('show');
+            msgInput.focus();
+          });
+        });
+      } else {
+        slashMenu.classList.remove('show');
+      }
+    } else if (slashMenu) {
+      slashMenu.classList.remove('show');
+    }
   });
   msgInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
