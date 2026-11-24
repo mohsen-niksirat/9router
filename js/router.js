@@ -91,6 +91,36 @@ function pickKey(provider, policy, triedKeyIds) {
   return candidates[0];
 }
 
+function extractContentParts(content) {
+  if (!content) return { text: '', thinking: '' };
+  if (typeof content === 'string') return { text: content, thinking: '' };
+
+  let text = '';
+  let thinking = '';
+  const items = Array.isArray(content) ? content : [content];
+  for (const item of items) {
+    if (!item) continue;
+    if (typeof item === 'string') {
+      text += item;
+    } else if (item.type === 'thinking' || item.type === 'reasoning') {
+      if (typeof item.thinking === 'string') thinking += item.thinking;
+      else if (Array.isArray(item.thinking)) {
+        for (const sub of item.thinking) {
+          if (typeof sub === 'string') thinking += sub;
+          else if (sub?.text) thinking += sub.text;
+        }
+      } else if (typeof item.text === 'string') {
+        thinking += item.text;
+      }
+    } else if (typeof item.text === 'string') {
+      text += item.text;
+    } else if (typeof item.content === 'string') {
+      text += item.content;
+    }
+  }
+  return { text, thinking };
+}
+
 async function parseSSE(res, onStream, signal) {
   const reader = res.body.getReader();
   const dec = new TextDecoder('utf-8');
@@ -110,13 +140,20 @@ async function parseSSE(res, onStream, signal) {
       if (ev.usage) usage = ev.usage;
       const d = ev.choices?.[0]?.delta || {};
       const r = d.reasoning_content || d.reasoning || '';
-      if (r) {
+      if (typeof r === 'string' && r) {
         thinking += r;
         onStream?.({ type: 'thinking', thinking, text: accumulated });
       }
       if (d.content) {
-        accumulated += d.content;
-        onStream?.({ type: 'delta', delta: d.content, text: accumulated, thinking });
+        const parts = extractContentParts(d.content);
+        if (parts.thinking) {
+          thinking += parts.thinking;
+          onStream?.({ type: 'thinking', thinking, text: accumulated });
+        }
+        if (parts.text) {
+          accumulated += parts.text;
+          onStream?.({ type: 'delta', delta: parts.text, text: accumulated, thinking });
+        }
       }
     } catch {}
   };
@@ -205,9 +242,10 @@ export async function runChatCompletion({ messages, onStream, signal }) {
         let out;
         if (ct.includes('application/json') || !res.body?.getReader) {
           const data = await res.json();
+          const parts = extractContentParts(data.choices?.[0]?.message?.content);
           out = {
-            text: data.choices?.[0]?.message?.content || '',
-            thinking: '',
+            text: parts.text,
+            thinking: parts.thinking,
             usage: data.usage,
           };
         } else {
