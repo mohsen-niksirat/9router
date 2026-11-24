@@ -50,10 +50,14 @@ function updateTargetPill() {
   }
 }
 
-function renderSessionsSidebar() {
+function renderSessionsSidebar(filter = '') {
   const list = document.getElementById('sessions-list');
   const activeId = store.state.activeSessionId;
-  list.innerHTML = store.state.sessions
+  const q = filter.trim().toLowerCase();
+  const rows = q
+    ? store.state.sessions.filter((s) => s.title.toLowerCase().includes(q))
+    : store.state.sessions;
+  list.innerHTML = rows
     .map(
       (s) => `
       <div class="ses-row ${s.id === activeId ? 'active' : ''}" data-ses="${s.id}">
@@ -362,11 +366,63 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('file-input').addEventListener('change', (e) => {
     Array.from(e.target.files || []).forEach((f) => {
       const r = new FileReader();
-      r.onload = (ev) => { attachedImages.push(ev.target.result); renderPreviews(); };
-      r.readAsDataURL(f);
+      if (f.type.startsWith('image/')) {
+        r.onload = (ev) => { attachedImages.push(ev.target.result); renderPreviews(); };
+        r.readAsDataURL(f);
+      } else {
+        r.onload = (ev) => {
+          const content = String(ev.target.result || '').slice(0, 40000);
+          const inp = document.getElementById('msg-input');
+          const ext = f.name.split('.').pop() || 'text';
+          inp.value = `${inp.value ? inp.value + '\n\n' : ''}📄 فایل (${f.name}):\n\`\`\`${ext}\n${content}\n\`\`\``;
+          inp.dispatchEvent(new Event('input'));
+          toast(`فایل ${f.name} پیوست شد`);
+        };
+        r.readAsText(f);
+      }
     });
     e.target.value = '';
   });
+
+  // Session search
+  document.getElementById('ses-search')?.addEventListener('input', (e) => {
+    renderSessionsSidebar(e.target.value);
+  });
+
+  // Voice input (Web Speech API)
+  const voiceBtn = document.getElementById('btn-voice');
+  const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (voiceBtn) {
+    if (!SpeechRec) {
+      voiceBtn.style.display = 'none';
+    } else {
+      let rec = null;
+      let listening = false;
+      voiceBtn.addEventListener('click', () => {
+        if (listening && rec) { rec.stop(); return; }
+        rec = new SpeechRec();
+        rec.lang = 'fa-IR';
+        rec.interimResults = false;
+        rec.onstart = () => { listening = true; voiceBtn.style.color = 'var(--danger)'; toast('🎤 در حال گوش دادن...'); };
+        rec.onresult = (ev) => {
+          const transcript = ev.results?.[0]?.[0]?.transcript || '';
+          if (transcript) {
+            const inp = document.getElementById('msg-input');
+            inp.value = inp.value ? `${inp.value} ${transcript}` : transcript;
+            inp.dispatchEvent(new Event('input'));
+          }
+        };
+        rec.onend = () => { listening = false; voiceBtn.style.color = ''; };
+        rec.onerror = () => { listening = false; voiceBtn.style.color = ''; toast('خطا در تشخیص صدا'); };
+        rec.start();
+      });
+    }
+  }
+
+  // Register PWA Service Worker
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  }
 
   document.getElementById('send-btn').addEventListener('click', handleSend);
   const msgInput = document.getElementById('msg-input');

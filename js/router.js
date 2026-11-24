@@ -256,8 +256,18 @@ export async function runImageGeneration({ prompt, sourceImageDataUrl = null, si
   // Prefer an active provider with keys (ideally one that supportsImages)
   const withKeys = store.state.providers.filter((p) => p.keys.some((k) => k.status !== 'dead'));
   const targetProv = withKeys.find((p) => p.supportsImages) || withKeys[0];
-  if (!targetProv) {
-    throw new Error('برای تولید یا ویرایش تصویر حداقل یک کلید API فعال (مثل OpenAI یا ارائه‌دهنده سازگار با /images) اضافه کنید.');
+
+  // Free zero-key fallback via Pollinations.ai when no image-capable API key is configured
+  if (!targetProv || (!targetProv.supportsImages && !sourceImageDataUrl)) {
+    const seed = Math.floor(Math.random() * 1e9);
+    const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1024&height=1024&seed=${seed}&nologo=true`;
+    return {
+      imageUrl: url,
+      revisedPrompt: prompt,
+      provider: 'Pollinations (رایگان بدون کلید)',
+      model: 'flux',
+      elapsedMs: Math.round(performance.now() - t0),
+    };
   }
 
   const key = targetProv.keys.find((k) => k.status !== 'dead');

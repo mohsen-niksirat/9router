@@ -1,0 +1,9 @@
+{
+  "name": "9Router Web — AI Chat & Visual Router",
+  "short_name": "9Router",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#14151a",
+  "theme_color": "#14151a",
+  "description": "Multi-Provider BYOK AI Chat with Visual Node Combo Builder"
+}

@@ -4,6 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>9Router Web — Multi-Provider AI Chat & Visual Router</title>
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#14151a">
   <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
@@ -26,6 +28,7 @@
     <button class="nav-item" data-tab="combos">🔀 کمبو گرافیکی (نودها)</button>
 
     <div class="sessions-head">تاریخچه گفتگوها</div>
+    <input id="ses-search" class="hub-search" style="min-width:0;width:100%;padding:6px 10px;font-size:12.5px;margin-bottom:4px" placeholder="جستجو در گفتگوها...">
     <div class="sessions-list" id="sessions-list"></div>
 
     <div class="sidebar-foot">
@@ -61,8 +64,9 @@
         <div class="composer">
           <div class="composer-previews" id="composer-previews"></div>
           <div class="composer-row">
-            <button class="icon-btn" id="btn-attach" title="پیوست تصویر">📎</button>
-            <input type="file" id="file-input" accept="image/*" multiple style="display:none">
+            <button class="icon-btn" id="btn-attach" title="پیوست تصویر یا فایل کد">📎</button>
+            <input type="file" id="file-input" accept="image/*,.txt,.js,.ts,.py,.json,.md,.html,.css,.sql,.csv,.yaml,.yml,.xml" multiple style="display:none">
+            <button class="icon-btn" id="btn-voice" title="ورودی صوتی (فارسی)">🎤</button>
             <button class="mode-pill" id="btn-img-mode" title="تولید یا ویرایش تصویر">🎨 تصویر</button>
             <textarea id="msg-input" rows="1" placeholder="پیام خود را بنویسید..."></textarea>
             <button class="send-btn" id="send-btn" title="ارسال">↑</button>
