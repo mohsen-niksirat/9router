@@ -45,6 +45,14 @@ function extractHtmlCode(text) {
   return null;
 }
 
+function formatAgentOutput(text, thinking, isLive = false) {
+  const thinkHtml = thinking
+    ? `<details class="think-box" ${isLive ? 'open' : ''}><summary>💭 ${isLive ? 'در حال تفکر...' : 'فرایند تفکر مدل'}</summary><div style="margin-top:6px">${escHtml(isLive ? thinking.slice(-600) : thinking).replace(/\n/g, '<br>')}</div></details>`
+    : '';
+  const bodyHtml = text ? renderMarkdown(text) : (isLive && !thinking ? 'در حال اتصال...' : '');
+  return `${thinkHtml}${bodyHtml}${isLive ? ' ▌' : ''}`;
+}
+
 export function renderAgentTeam(container, { onToast }) {
   if (!store.state.teams?.length) return;
   let team = store.state.teams.find((t) => t.id === selectedTeamId) || store.state.teams[0];
@@ -212,10 +220,10 @@ export function renderAgentTeam(container, { onToast }) {
           { role: 'system', content: team.manager.instructions },
           { role: 'user', content: `هدف کاربر:\n${goal}\n\nاعضای تیم:\n${workersDesc}\n\nیک برنامه کوتاه و شفاف بنویس که هر عضو دقیقاً چه کاری انجام دهد.` },
         ],
-        ({ text }) => { mgrBody.innerHTML = renderMarkdown(text) + ' ▌'; mgrBody.scrollTop = mgrBody.scrollHeight; },
+        ({ text, thinking }) => { mgrBody.innerHTML = formatAgentOutput(text, thinking, true); mgrBody.scrollTop = mgrBody.scrollHeight; },
         teamAbort.signal
       );
-      mgrBody.innerHTML = renderMarkdown(planRes.text);
+      mgrBody.innerHTML = formatAgentOutput(planRes.text, planRes.thinking, false);
       mgrCard.querySelector('.stat-pill').textContent = `✓ ${planRes.provider} / ${planRes.model}`;
       setStepStatus('plan', 'done');
 
@@ -238,10 +246,10 @@ export function renderAgentTeam(container, { onToast }) {
             { role: 'system', content: `نقش تو: ${w.role}\nوظیفه: ${w.instructions}` },
             { role: 'user', content: `هدف اصلی کاربر:\n${goal}\n\nبرنامه مدیر:\n${planRes.text}${prevContext}\n\nحالا وظیفه خودت را با دقت بالا انجام بده.` },
           ],
-          ({ text }) => { wBody.innerHTML = renderMarkdown(text) + ' ▌'; wBody.scrollTop = wBody.scrollHeight; feedEl.scrollTop = feedEl.scrollHeight; },
+          ({ text, thinking }) => { wBody.innerHTML = formatAgentOutput(text, thinking, true); wBody.scrollTop = wBody.scrollHeight; feedEl.scrollTop = feedEl.scrollHeight; },
           teamAbort.signal
         );
-        wBody.innerHTML = renderMarkdown(wRes.text);
+        wBody.innerHTML = formatAgentOutput(wRes.text, wRes.thinking, false);
         wCard.querySelector('.stat-pill').textContent = `✓ ${wRes.provider} / ${wRes.model}`;
         setStepStatus(w.id, 'done');
         workerOutputs.push({ role: w.role, text: wRes.text });
@@ -262,10 +270,10 @@ export function renderAgentTeam(container, { onToast }) {
           { role: 'system', content: team.manager.instructions },
           { role: 'user', content: `هدف کاربر:\n${goal}\n\nخروجی اعضای تیم:\n${allWork}\n\nهمه موارد را یکپارچه کن و خروجی نهایی کامل و آماده استفاده را تحویل بده. اگر پروژه وب است، کل کد HTML/CSS/JS را در یک بلوک \`\`\`html واحد قرار بده.` },
         ],
-        ({ text }) => { finalBody.innerHTML = renderMarkdown(text) + ' ▌'; finalBody.scrollTop = finalBody.scrollHeight; feedEl.scrollTop = feedEl.scrollHeight; },
+        ({ text, thinking }) => { finalBody.innerHTML = formatAgentOutput(text, thinking, true); finalBody.scrollTop = finalBody.scrollHeight; feedEl.scrollTop = feedEl.scrollHeight; },
         teamAbort.signal
       );
-      finalBody.innerHTML = renderMarkdown(finalRes.text);
+      finalBody.innerHTML = formatAgentOutput(finalRes.text, finalRes.thinking, false);
       finalCard.querySelector('.stat-pill').textContent = `✓ ${finalRes.provider} / ${finalRes.model}`;
       setStepStatus('final', 'done');
 

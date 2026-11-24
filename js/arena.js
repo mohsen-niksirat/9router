@@ -80,12 +80,18 @@ export function renderArena(container, { onToast }) {
             { role: 'user', content: prompt },
           ],
           signal: arenaAborts[idx].signal,
-          onStream: ({ text }) => {
-            bodyEl.innerHTML = renderMarkdown(text) + ' ▌';
+          onStream: ({ text, thinking }) => {
+            const tHtml = thinking
+              ? `<details class="think-box" open><summary>💭 در حال تفکر...</summary><div style="margin-top:6px">${escHtml(thinking.slice(-500)).replace(/\n/g, '<br>')}</div></details>`
+              : '';
+            bodyEl.innerHTML = `${tHtml}${renderMarkdown(text || '')} ▌`;
             bodyEl.scrollTop = bodyEl.scrollHeight;
           },
         });
-        bodyEl.innerHTML = renderMarkdown(res.text);
+        const finalThink = res.thinking
+          ? `<details class="think-box"><summary>💭 فرایند تفکر مدل</summary><div style="margin-top:6px">${escHtml(res.thinking).replace(/\n/g, '<br>')}</div></details>`
+          : '';
+        bodyEl.innerHTML = `${finalThink}${renderMarkdown(res.text)}`;
         const sec = Math.max(0.1, res.elapsedMs / 1000);
         const tps = Math.round((res.tokens || 0) / sec);
         footEl.innerHTML = `<span>${escHtml(res.provider)} / ${escHtml(res.model)}</span><span>${sec.toFixed(1)}s · ~${tps} tok/s</span>`;
