@@ -8,6 +8,7 @@ import { renderMarkdown, escHtml } from './markdown.js';
 import { runChatCompletion, runImageGeneration } from './router.js';
 import { renderProvidersHub } from './providers_ui.js';
 import { renderComboGraph } from './combo_graph.js';
+import { renderAgentTeam } from './agent_team.js';
 
 let currentTab = 'chat';
 let attachedImages = [];
@@ -312,8 +313,16 @@ function switchTab(tab) {
         toast('کمبو در چت فعال شد');
       },
     });
+  } else if (tab === 'team') {
+    renderAgentTeam(document.getElementById('team-mount'), { onToast: toast });
   }
 }
+
+window.__openHtmlPreview = (htmlCode) => {
+  const frame = document.getElementById('preview-frame');
+  if (frame) frame.srcdoc = htmlCode;
+  document.getElementById('modal-preview')?.classList.add('open');
+};
 
 // ─── Modals ───────────────────────────────────────────────────────────────────
 window.__openAddProviderModal = () => {

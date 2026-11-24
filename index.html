@@ -26,6 +26,7 @@
     <button class="nav-item active" data-tab="chat">💬 گفتگو</button>
     <button class="nav-item" data-tab="providers">🔑 ارائه‌دهنده‌ها و کلیدها</button>
     <button class="nav-item" data-tab="combos">🔀 کمبو گرافیکی (نودها)</button>
+    <button class="nav-item" data-tab="team">🤖 تیم ایجنت‌ها (Swarm)</button>
 
     <div class="sessions-head">تاریخچه گفتگوها</div>
     <input id="ses-search" class="hub-search" style="min-width:0;width:100%;padding:6px 10px;font-size:12.5px;margin-bottom:4px" placeholder="جستجو در گفتگوها...">
@@ -84,7 +85,23 @@
     <section class="view" id="view-combos">
       <div style="display:flex;flex-direction:column;flex:1;min-height:0" id="combos-mount"></div>
     </section>
+
+    <!-- Visual Multi-Agent Team Orchestrator -->
+    <section class="view" id="view-team">
+      <div style="display:flex;flex-direction:column;flex:1;min-height:0" id="team-mount"></div>
+    </section>
   </main>
+</div>
+
+<!-- Live HTML Preview Modal -->
+<div class="modal-bg" id="modal-preview">
+  <div class="modal" style="max-width:920px;height:82vh">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <h3>👁️ پیش‌نمایش زنده خروجی تیم</h3>
+      <button class="btn btn-sm btn-ghost" data-close-modal>بستن ×</button>
+    </div>
+    <iframe id="preview-frame" sandbox="allow-scripts" style="flex:1;width:100%;border:1px solid var(--border);border-radius:10px;background:#fff"></iframe>
+  </div>
 </div>
 
 <!-- Add Provider Modal -->
