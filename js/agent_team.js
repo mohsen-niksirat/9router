@@ -35,12 +35,16 @@ async function callAgent(providerId, messages, onStream, signal) {
 }
 
 function extractHtmlCode(text) {
-  const m = String(text || '').match(/```html\n?([\s\S]*?)```/i);
-  if (m) return m[1];
-  if (/<html[\s>]/i.test(text || '') && /<\/html>/i.test(text || '')) {
-    const start = text.search(/<!doctype|<html/i);
-    const end = text.lastIndexOf('</html>') + 7;
-    if (start >= 0 && end > start) return text.slice(start, end);
+  const s = String(text || '');
+  const closed = s.match(/```html\n?([\s\S]*?)```/i);
+  if (closed) return closed[1];
+  // Handle truncated response where closing ``` was cut off by max_tokens
+  const unclosed = s.match(/```html\n?([\s\S]+)$/i);
+  if (unclosed && /<html|<body|<div|<style/i.test(unclosed[1])) return unclosed[1];
+  if (/<html[\s>]|<!doctype html/i.test(s)) {
+    const start = s.search(/<!doctype html|<html/i);
+    const endIdx = s.lastIndexOf('</html>');
+    return endIdx > start ? s.slice(start, endIdx + 7) : s.slice(start);
   }
   return null;
 }
@@ -278,23 +282,39 @@ export function renderAgentTeam(container, { onToast }) {
       setStepStatus('final', 'done');
 
       const finalHtml = extractHtmlCode(finalRes.text) || bestHtmlFound;
-      if (finalHtml) {
-        const acts = document.createElement('div');
-        acts.className = 'final-actions';
-        acts.innerHTML = `
-          <button class="btn btn-amber btn-sm" id="btn-live-preview">👁️ پیش‌نمایش زنده سایت</button>
-          <button class="btn btn-ghost btn-sm" id="btn-dl-html">⬇️ دانلود index.html</button>
-        `;
-        finalCard.appendChild(acts);
-        acts.querySelector('#btn-live-preview').addEventListener('click', () => window.__openHtmlPreview?.(finalHtml));
-        acts.querySelector('#btn-dl-html').addEventListener('click', () => {
-          const blob = new Blob([finalHtml], { type: 'text/html;charset=utf-8' });
-          const a = document.createElement('a');
-          a.href = URL.createObjectURL(blob);
-          a.download = 'index.html';
-          a.click();
-        });
-      }
+      const fullReportMd = `# هدف پروژه\n${goal}\n\n## برنامه مدیر\n${planRes.text}\n\n${workerOutputs.map((o) => `## ${o.role}\n${o.text}`).join('\n\n')}\n\n## خروجی نهایی\n${finalRes.text}`;
+
+      // Persist last team run in localStorage so switching tabs never loses it
+      store.state.lastTeamRun = { goal, fullReportMd, finalHtml: finalHtml || null, ts: Date.now() };
+      store.save();
+
+      const acts = document.createElement('div');
+      acts.className = 'final-actions';
+      acts.innerHTML = `
+        ${finalHtml ? '<button class="btn btn-amber btn-sm" id="btn-live-preview">👁️ پیش‌نمایش زنده سایت</button>' : ''}
+        ${finalHtml ? '<button class="btn btn-ok btn-sm" id="btn-dl-html">⬇️ دانلود index.html</button>' : ''}
+        <button class="btn btn-ghost btn-sm" id="btn-dl-md">📄 دانلود کل گزارش (.md)</button>
+        <button class="btn btn-ghost btn-sm" id="btn-copy-final">📋 کپی خروجی</button>
+      `;
+      finalCard.appendChild(acts);
+      acts.querySelector('#btn-live-preview')?.addEventListener('click', () => window.__openHtmlPreview?.(finalHtml));
+      acts.querySelector('#btn-dl-html')?.addEventListener('click', () => {
+        const blob = new Blob([finalHtml], { type: 'text/html;charset=utf-8' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = 'index.html';
+        a.click();
+      });
+      acts.querySelector('#btn-dl-md')?.addEventListener('click', () => {
+        const blob = new Blob([fullReportMd], { type: 'text/markdown;charset=utf-8' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `9router-team-output-${Date.now()}.md`;
+        a.click();
+      });
+      acts.querySelector('#btn-copy-final')?.addEventListener('click', () => {
+        navigator.clipboard.writeText(finalHtml || finalRes.text).then(() => onToast('کپی شد ✓'));
+      });
       feedEl.scrollTop = feedEl.scrollHeight;
     } catch (err) {
       if (err.name !== 'AbortError') {
