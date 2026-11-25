@@ -80,6 +80,73 @@ export const ROUTING_POLICIES = {
   least_used: { label: 'Least Used', labelFa: 'کمترین مصرف', desc: 'Pick the provider/key with the fewest tokens used' },
 };
 
+export const TEAM_MODES = {
+  manager_worker: { label: 'Manager-Worker', labelFa: 'مدیر-متخصص', desc: 'Manager delegates tasks to workers and synthesizes the final output' },
+  sequential: { label: 'Sequential', labelFa: 'ترتیبی', desc: 'Agents run one after another, each building on the previous output' },
+  parallel: { label: 'Parallel', labelFa: 'موازی', desc: 'All workers run concurrently and the manager merges their outputs' },
+  debate_review: { label: 'Debate & Review', labelFa: 'نقد و بازبینی', desc: 'Iterative draft, critique, and revision loop up to maxRounds' },
+};
+
+const VALID_TEAM_MODES = new Set(Object.keys(TEAM_MODES));
+
+function clampTemperature(val, fallback = 0.7) {
+  const n = Number(val);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(2, Math.round(n * 100) / 100));
+}
+
+function normalizeAgent(agent = {}, defaults = {}) {
+  const role = String(agent.role ?? defaults.role ?? 'متخصص').trim() || 'متخصص';
+  const name = String(agent.name ?? defaults.name ?? role).trim() || role;
+  return {
+    ...(agent.id ? { id: String(agent.id) } : defaults.id ? { id: String(defaults.id) } : {}),
+    name,
+    role,
+    icon: String(agent.icon ?? defaults.icon ?? '🤖').trim() || '🤖',
+    providerId: String(agent.providerId ?? defaults.providerId ?? '').trim(),
+    model: String(agent.model ?? defaults.model ?? '').trim(),
+    keyId: String(agent.keyId ?? defaults.keyId ?? '').trim(),
+    temperature: clampTemperature(agent.temperature, defaults.temperature ?? 0.7),
+    instructions: String(agent.instructions ?? defaults.instructions ?? ''),
+  };
+}
+
+function normalizeTeam(team = {}, index = 0) {
+  const mode = VALID_TEAM_MODES.has(team.mode) ? team.mode : 'manager_worker';
+  const rawRounds = Number(team.maxRounds);
+  const maxRounds = Number.isFinite(rawRounds) && rawRounds >= 1 ? Math.min(10, Math.floor(rawRounds)) : 1;
+  const manager = normalizeAgent(team.manager || {}, {
+    name: 'مدیر تیم',
+    role: 'مدیر هماهنگ‌کننده',
+    icon: '🧠',
+    temperature: 0.7,
+    instructions: '',
+  });
+  delete manager.id;
+  const rawWorkers = Array.isArray(team.workers) ? team.workers : [];
+  const workers = rawWorkers.map((w, i) =>
+    normalizeAgent(w || {}, {
+      id: w?.id || `w_${index}_${i + 1}`,
+      name: w?.name || w?.role || `عضو ${i + 1}`,
+      role: w?.role || `متخصص ${i + 1}`,
+      icon: '🤖',
+      temperature: 0.7,
+      instructions: '',
+    }),
+  );
+  return {
+    id: String(team.id || `team_${index + 1}`),
+    name: String(team.name || 'تیم جدید').trim() || 'تیم جدید',
+    icon: String(team.icon || '🤖').trim() || '🤖',
+    description: String(team.description || '').trim(),
+    mode,
+    maxRounds,
+    hitlPause: Boolean(team.hitlPause),
+    manager,
+    workers,
+  };
+}
+
 const DEFAULT_STATE = {
   providers: BUILTIN_PROVIDERS,
   combos: [
@@ -110,26 +177,211 @@ const DEFAULT_STATE = {
   teams: [
     {
       id: 'team_web',
-      name: 'تیم ساخت وب‌سایت',
+      name: 'استودیو ساخت وب‌سایت (Web App Studio)',
+      icon: '🌐',
+      description: 'طراحی رابط کاربری، پیاده‌سازی فرانت‌اند مدرن و بازبینی کد در یک خروجی HTML آماده اجرا.',
+      mode: 'manager_worker',
       maxRounds: 1,
-      manager: { providerId: '', instructions: 'تو مدیر فنی پروژه هستی. درخواست کاربر را تحلیل کن، برای هر عضو تیم وظیفه دقیق بنویس و در نهایت همه خروجی‌ها را در یک فایل HTML کامل و آماده اجرا جمع‌بندی کن.' },
+      hitlPause: false,
+      manager: {
+        name: 'مدیر فنی (Tech Lead)',
+        role: 'مدیر پروژه و معمار فرانت‌اند',
+        icon: '🧠',
+        providerId: '',
+        model: '',
+        keyId: '',
+        temperature: 0.6,
+        instructions: 'تو مدیر فنی پروژه هستی. درخواست کاربر را تحلیل کن، برای هر عضو تیم وظیفه دقیق بنویس و در نهایت همه خروجی‌ها را در یک فایل HTML کامل، مدرن، واکنش‌گرا و آماده اجرا (در بلوک ```html) جمع‌بندی کن.',
+      },
       workers: [
-        { id: 'w_1', role: '🎨 طراح UI/UX', providerId: '', instructions: 'ساختار صفحه، پالت رنگ مدرن، تایپوگرافی و بخش‌های کلیدی رابط کاربری را طراحی و مشخص کن.' },
-        { id: 'w_2', role: '💻 برنامه‌نویس Frontend', providerId: '', instructions: 'بر اساس طراحی، کد کامل، واکنش‌گرا و تمیز HTML + CSS + JS را در یک بلوک کد ```html بنویس.' },
-        { id: 'w_3', role: '🔍 بازبین و دیباگر', providerId: '', instructions: 'کد تولیدشده را از نظر باگ، زیبایی ظاهری و تجربه کاربری بررسی کن و اصلاحات لازم را پیشنهاد بده.' },
+        {
+          id: 'w_web_1',
+          name: 'آرش (UI/UX)',
+          role: 'طراح UI/UX',
+          icon: '🎨',
+          providerId: '',
+          model: '',
+          keyId: '',
+          temperature: 0.8,
+          instructions: 'ساختار صفحه، سلسله‌مراتب بصری، پالت رنگ مدرن، تایپوگرافی و جزئیات تعاملی رابط کاربری را طراحی و مشخص کن.',
+        },
+        {
+          id: 'w_web_2',
+          name: 'سارا (Frontend)',
+          role: 'برنامه‌نویس Frontend',
+          icon: '💻',
+          providerId: '',
+          model: '',
+          keyId: '',
+          temperature: 0.4,
+          instructions: 'بر اساس طراحی، کد کامل، تمیز، واکنش‌گرا و بدون وابستگی شکسته HTML + CSS + JS را در یک بلوک کد ```html بنویس.',
+        },
+        {
+          id: 'w_web_3',
+          name: 'کیان (QA)',
+          role: 'بازبین و دیباگر',
+          icon: '🔍',
+          providerId: '',
+          model: '',
+          keyId: '',
+          temperature: 0.3,
+          instructions: 'کد تولیدشده را از نظر باگ، دسترسی‌پذیری، زیبایی ظاهری، ریسپانسیو و تجربه کاربری بررسی کن و اصلاحات دقیق را ارائه بده.',
+        },
       ],
     },
     {
       id: 'team_research',
-      name: 'تیم تحقیق و محتوا',
+      name: 'تیم تحقیق عمیق (Deep Research Team)',
+      icon: '🔬',
+      description: 'پژوهش موازی از زوایای مختلف، تحلیل داده و تدوین گزارش جامع و مستند.',
+      mode: 'parallel',
       maxRounds: 1,
-      manager: { providerId: '', instructions: 'تو سردبیر و مدیر تحقیق هستی. موضوع را به بخش‌های کلیدی بشکن، به اعضا بسپار و در نهایت گزارش جامع و خواندنی تحویل بده.' },
+      hitlPause: false,
+      manager: {
+        name: 'سردبیر تحقیق (Lead Analyst)',
+        role: 'سردبیر و تحلیل‌گر ارشد',
+        icon: '🧭',
+        providerId: '',
+        model: '',
+        keyId: '',
+        temperature: 0.5,
+        instructions: 'تو سردبیر و مدیر تحقیق هستی. یافته‌های اعضای تیم را یکپارچه کن، تناقض‌ها را شفاف کن و در نهایت یک گزارش جامع، ساختاریافته و قابل استناد تحویل بده.',
+      },
       workers: [
-        { id: 'w_r1', role: '🔎 پژوهشگر', providerId: '', instructions: 'نکات کلیدی، حقایق مهم و ساختار علمی موضوع را استخراج کن.' },
-        { id: 'w_r2', role: '✍️ نویسنده', providerId: '', instructions: 'بر اساس یافته‌های پژوهشگر، متن روان، جذاب و ساختاریافته بنویس.' },
+        {
+          id: 'w_res_1',
+          name: 'پژوهشگر مبانی',
+          role: 'پژوهشگر علمی و فنی',
+          icon: '📚',
+          providerId: '',
+          model: '',
+          keyId: '',
+          temperature: 0.4,
+          instructions: 'مفاهیم کلیدی، حقایق بنیادی، پیشینه موضوع و ساختار علمی آن را دقیق و خلاصه استخراج کن.',
+        },
+        {
+          id: 'w_res_2',
+          name: 'تحلیل‌گر بازار و کاربرد',
+          role: 'تحلیل‌گر عملیاتی',
+          icon: '📊',
+          providerId: '',
+          model: '',
+          keyId: '',
+          temperature: 0.6,
+          instructions: 'کاربردهای واقعی، مزایا، محدودیت‌ها، مقایسه گزینه‌ها و روندهای روز مرتبط با موضوع را بررسی کن.',
+        },
+        {
+          id: 'w_res_3',
+          name: 'منتقد و راستی‌آزما',
+          role: 'ارزیاب ریسک و دقت',
+          icon: '⚖️',
+          providerId: '',
+          model: '',
+          keyId: '',
+          temperature: 0.3,
+          instructions: 'فرض‌های پنهان، ریسک‌ها، نقاط کور و نکات نیازمند احتیاط در این موضوع را شناسایی و فهرست کن.',
+        },
+      ],
+    },
+    {
+      id: 'team_architect',
+      name: 'تیم معماری و بازبینی کد (Code Review & Architect Squad)',
+      icon: '🛡️',
+      description: 'طراحی معماری، نقد امنیتی و کارایی، و بازنویسی نهایی در چرخه نقد و بازبینی.',
+      mode: 'debate_review',
+      maxRounds: 2,
+      hitlPause: false,
+      manager: {
+        name: 'معمار ارشد (Principal Architect)',
+        role: 'تصمیم‌گیر نهایی معماری',
+        icon: '🏛️',
+        providerId: '',
+        model: '',
+        keyId: '',
+        temperature: 0.3,
+        instructions: 'تو معمار ارشد نرم‌افزار هستی. پیشنهاد اولیه و نقدهای امنیتی/کارایی را جمع‌بندی کن و نسخه نهایی، تمیز و قابل اجرا را همراه با چک‌لیست تصمیمات ارائه بده.',
+      },
+      workers: [
+        {
+          id: 'w_arch_1',
+          name: 'مهندس پیاده‌سازی',
+          role: 'توسعه‌دهنده ارشد',
+          icon: '⚙️',
+          providerId: '',
+          model: '',
+          keyId: '',
+          temperature: 0.4,
+          instructions: 'معماری پیشنهادی یا پیاده‌سازی اولیه را با کد تمیز، ماژولار و خوانا بنویس و در دورهای بعدی بازخورد منتقد را اعمال کن.',
+        },
+        {
+          id: 'w_arch_2',
+          name: 'بازبین امنیت و کارایی',
+          role: 'منتقد کد و امنیت',
+          icon: '🔐',
+          providerId: '',
+          model: '',
+          keyId: '',
+          temperature: 0.2,
+          instructions: 'کد و معماری را به شکل سخت‌گیرانه از نظر باگ‌های مرزی، آسیب‌پذیری‌های امنیتی، پیچیدگی زمانی و نگهداری‌پذیری نقد کن و اصلاحات مشخص پیشنهاد بده.',
+        },
+      ],
+    },
+    {
+      id: 'team_content_seo',
+      name: 'تیم محتوا و سئو (Content & SEO Team)',
+      icon: '✍️',
+      description: 'خط تولید ترتیبی از استراتژی کلمات کلیدی تا نگارش مقاله و ویراستاری نهایی سئو.',
+      mode: 'sequential',
+      maxRounds: 1,
+      hitlPause: false,
+      manager: {
+        name: 'مدیر محتوا (Content Lead)',
+        role: 'سردبیر و ناظر کیفیت',
+        icon: '📣',
+        providerId: '',
+        model: '',
+        keyId: '',
+        temperature: 0.6,
+        instructions: 'تو مدیر محتوا هستی. خروجی نهایی را از نظر لحن برند، خوانایی، ساختار هدینگ‌ها و آماده انتشار بودن تایید و جمع‌بندی کن.',
+      },
+      workers: [
+        {
+          id: 'w_seo_1',
+          name: 'استراتژیست سئو',
+          role: 'متخصص SEO و کلمات کلیدی',
+          icon: '🎯',
+          providerId: '',
+          model: '',
+          keyId: '',
+          temperature: 0.5,
+          instructions: 'قصد جستجوی کاربر، کلمات کلیدی اصلی و فرعی، عنوان سئو، متا دیسکریپشن و ساختار تیترهای H1/H2/H3 را طراحی کن.',
+        },
+        {
+          id: 'w_seo_2',
+          name: 'نویسنده ارشد',
+          role: 'کپی‌رایتر و تولیدکننده محتوا',
+          icon: '📝',
+          providerId: '',
+          model: '',
+          keyId: '',
+          temperature: 0.8,
+          instructions: 'بر اساس بریف سئو، محتوای کامل، جذاب، روان و کاربردی بنویس که هم برای خواننده ارزشمند باشد و هم ساختار سئو را رعایت کند.',
+        },
+        {
+          id: 'w_seo_3',
+          name: 'ویراستار و بهینه‌ساز',
+          role: 'ویراستار نهایی',
+          icon: '✨',
+          providerId: '',
+          model: '',
+          keyId: '',
+          temperature: 0.4,
+          instructions: 'متن را ویرایش نگارشی کن، جملات اضافی را حذف کن، خوانایی را بالا ببر و در پایان CTA و خلاصه کلیدی اضافه کن.',
+        },
       ],
     },
   ],
+  teamRuns: [],
   settings: {
     theme: 'dark',
     lang: 'fa',
@@ -161,9 +413,15 @@ class Store {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return clone(DEFAULT_STATE);
       const parsed = JSON.parse(raw);
+      const migratedTeams = Array.isArray(parsed.teams) && parsed.teams.length > 0
+        ? parsed.teams.map((t, i) => normalizeTeam(t, i))
+        : clone(DEFAULT_STATE.teams);
+      const teamRuns = Array.isArray(parsed.teamRuns) ? parsed.teamRuns.slice(0, 20) : [];
       return {
         ...clone(DEFAULT_STATE),
         ...parsed,
+        teams: migratedTeams,
+        teamRuns,
         settings: {
           ...DEFAULT_STATE.settings,
           ...(parsed.settings || {}),
@@ -391,6 +649,156 @@ class Store {
     return forked;
   }
 
+  // ─── Teams & Team Runs (OpenBot Studio) ───────────────────────────────────
+  createTeam(data = {}) {
+    const team = normalizeTeam(
+      {
+        id: this.uid('team'),
+        name: data.name || 'تیم جدید',
+        icon: data.icon || '🤖',
+        description: data.description || '',
+        mode: data.mode || 'manager_worker',
+        maxRounds: data.maxRounds ?? 1,
+        hitlPause: Boolean(data.hitlPause),
+        manager: data.manager || {
+          name: 'مدیر تیم',
+          role: 'مدیر هماهنگ‌کننده',
+          icon: '🧠',
+          providerId: '',
+          model: '',
+          keyId: '',
+          temperature: 0.7,
+          instructions: 'تو مدیر این تیم هستی. هدف کاربر را تحلیل کن، وظایف را هدایت کن و خروجی نهایی یکپارچه تحویل بده.',
+        },
+        workers: Array.isArray(data.workers) ? data.workers : [],
+      },
+      this.state.teams.length,
+    );
+    this.state.teams.push(team);
+    this.save();
+    return team;
+  }
+
+  updateTeam(id, patch = {}) {
+    const idx = this.state.teams.findIndex((t) => t.id === id);
+    if (idx === -1) return null;
+    const current = this.state.teams[idx];
+    const merged = {
+      ...current,
+      ...patch,
+      id: current.id,
+      manager: patch.manager ? { ...current.manager, ...patch.manager } : current.manager,
+      workers: Array.isArray(patch.workers) ? patch.workers : current.workers,
+    };
+    const updated = normalizeTeam(merged, idx);
+    this.state.teams[idx] = updated;
+    this.save();
+    return updated;
+  }
+
+  deleteTeam(id) {
+    const prevLen = this.state.teams.length;
+    this.state.teams = this.state.teams.filter((t) => t.id !== id);
+    if (this.state.teams.length === prevLen) return false;
+    this.save();
+    return true;
+  }
+
+  duplicateTeam(id) {
+    const src = this.state.teams.find((t) => t.id === id);
+    if (!src) return null;
+    const copy = clone(src);
+    copy.id = this.uid('team');
+    copy.name = `${src.name} (کپی)`;
+    copy.workers = (copy.workers || []).map((w) => ({ ...w, id: this.uid('w') }));
+    const normalized = normalizeTeam(copy, this.state.teams.length);
+    this.state.teams.push(normalized);
+    this.save();
+    return normalized;
+  }
+
+  addTeamWorker(teamId, worker = {}) {
+    const team = this.state.teams.find((t) => t.id === teamId);
+    if (!team) return null;
+    const w = normalizeAgent(
+      { ...worker, id: worker.id || this.uid('w') },
+      {
+        id: this.uid('w'),
+        name: worker.name || worker.role || `عضو ${team.workers.length + 1}`,
+        role: worker.role || `متخصص ${team.workers.length + 1}`,
+        icon: '🤖',
+        temperature: 0.7,
+        instructions: '',
+      },
+    );
+    team.workers.push(w);
+    this.save();
+    return w;
+  }
+
+  updateTeamWorker(teamId, workerId, patch = {}) {
+    const team = this.state.teams.find((t) => t.id === teamId);
+    if (!team) return null;
+    const idx = team.workers.findIndex((w) => w.id === workerId);
+    if (idx === -1) return null;
+    const current = team.workers[idx];
+    const updated = normalizeAgent({ ...current, ...patch, id: current.id }, current);
+    team.workers[idx] = updated;
+    this.save();
+    return updated;
+  }
+
+  deleteTeamWorker(teamId, workerId) {
+    const team = this.state.teams.find((t) => t.id === teamId);
+    if (!team) return false;
+    const prevLen = team.workers.length;
+    team.workers = team.workers.filter((w) => w.id !== workerId);
+    if (team.workers.length === prevLen) return false;
+    this.save();
+    return true;
+  }
+
+  moveTeamWorker(teamId, workerId, dir) {
+    const team = this.state.teams.find((t) => t.id === teamId);
+    if (!team) return false;
+    const step = dir < 0 ? -1 : dir > 0 ? 1 : 0;
+    if (!step) return false;
+    const idx = team.workers.findIndex((w) => w.id === workerId);
+    if (idx === -1) return false;
+    const targetIdx = idx + step;
+    if (targetIdx < 0 || targetIdx >= team.workers.length) return false;
+    const [item] = team.workers.splice(idx, 1);
+    team.workers.splice(targetIdx, 0, item);
+    this.save();
+    return true;
+  }
+
+  addTeamRun(run = {}) {
+    if (!Array.isArray(this.state.teamRuns)) this.state.teamRuns = [];
+    const entry = {
+      id: run.id || this.uid('trun'),
+      createdAt: run.createdAt || Date.now(),
+      ...clone(run),
+    };
+    if (!entry.id) entry.id = this.uid('trun');
+    if (!entry.createdAt) entry.createdAt = Date.now();
+    this.state.teamRuns.unshift(entry);
+    if (this.state.teamRuns.length > 20) {
+      this.state.teamRuns = this.state.teamRuns.slice(0, 20);
+    }
+    this.save();
+    return entry;
+  }
+
+  deleteTeamRun(id) {
+    if (!Array.isArray(this.state.teamRuns)) return false;
+    const prevLen = this.state.teamRuns.length;
+    this.state.teamRuns = this.state.teamRuns.filter((r) => r.id !== id);
+    if (this.state.teamRuns.length === prevLen) return false;
+    this.save();
+    return true;
+  }
+
   // ─── Export / Import Backup ───────────────────────────────────────────────
   exportJson() {
     return JSON.stringify(this.state, null, 2);
@@ -399,7 +807,16 @@ class Store {
   importJson(raw) {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed.providers)) throw new Error('Invalid backup file');
-    this.state = { ...clone(DEFAULT_STATE), ...parsed };
+    const migratedTeams = Array.isArray(parsed.teams) && parsed.teams.length > 0
+      ? parsed.teams.map((t, i) => normalizeTeam(t, i))
+      : clone(DEFAULT_STATE.teams);
+    const teamRuns = Array.isArray(parsed.teamRuns) ? parsed.teamRuns.slice(0, 20) : [];
+    this.state = {
+      ...clone(DEFAULT_STATE),
+      ...parsed,
+      teams: migratedTeams,
+      teamRuns,
+    };
     this.save();
   }
 }
