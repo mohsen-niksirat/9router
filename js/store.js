@@ -137,6 +137,11 @@ const DEFAULT_STATE = {
     temperature: 0.7,
     maxTokens: 4096,
     corsProxy: '',
+    webSearch: {
+      enabled: false,
+      provider: 'tavily',
+      apiKey: '',
+    },
   },
   rrCursor: 0,
 };
@@ -159,7 +164,14 @@ class Store {
       return {
         ...clone(DEFAULT_STATE),
         ...parsed,
-        settings: { ...DEFAULT_STATE.settings, ...(parsed.settings || {}) },
+        settings: {
+          ...DEFAULT_STATE.settings,
+          ...(parsed.settings || {}),
+          webSearch: {
+            ...DEFAULT_STATE.settings.webSearch,
+            ...(parsed.settings?.webSearch || {}),
+          },
+        },
       };
     } catch {
       return clone(DEFAULT_STATE);
@@ -286,7 +298,7 @@ class Store {
 
   // ─── Sessions ─────────────────────────────────────────────────────────────
   createSession(title = 'گفتگوی جدید') {
-    const s = { id: this.uid('ses'), title, messages: [], updatedAt: Date.now() };
+    const s = { id: this.uid('ses'), title, messages: [], pinned: false, folder: '', updatedAt: Date.now() };
     this.state.sessions.unshift(s);
     this.state.activeSessionId = s.id;
     this.save();
@@ -305,6 +317,40 @@ class Store {
       this.state.activeSessionId = this.state.sessions[0]?.id || null;
     }
     this.save();
+  }
+
+  togglePinSession(id) {
+    const s = this.state.sessions.find((x) => x.id === id);
+    if (!s) return null;
+    s.pinned = !s.pinned;
+    this.save();
+    return s;
+  }
+
+  setSessionFolder(id, folder) {
+    const s = this.state.sessions.find((x) => x.id === id);
+    if (!s) return null;
+    s.folder = String(folder || '').trim();
+    this.save();
+    return s;
+  }
+
+  forkSession(sessionId, upToIndex) {
+    const src = this.state.sessions.find((x) => x.id === sessionId);
+    if (!src) return null;
+    const sliced = clone(src.messages.slice(0, upToIndex + 1));
+    const forked = {
+      id: this.uid('ses'),
+      title: `${src.title} (انشعاب)`,
+      messages: sliced,
+      pinned: false,
+      folder: src.folder || '',
+      updatedAt: Date.now(),
+    };
+    this.state.sessions.unshift(forked);
+    this.state.activeSessionId = forked.id;
+    this.save();
+    return forked;
   }
 
   // ─── Export / Import Backup ───────────────────────────────────────────────

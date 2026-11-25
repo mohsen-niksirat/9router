@@ -61,9 +61,9 @@ export function renderArena(container, { onToast }) {
     const prompt = container.querySelector('#arena-prompt').value.trim();
     if (!prompt) return onToast('لطفاً پیام خود را بنویسید');
 
-    const prevTarget = store.state.activeTarget;
     runBtn.textContent = '■ توقف';
-    arenaAborts = [new AbortController(), new AbortController()];
+    const currentAborts = [new AbortController(), new AbortController()];
+    arenaAborts = currentAborts;
 
     const runSide = async (idx) => {
       const pid = container.querySelector(`#arena-prov-${idx}`).value;
@@ -71,16 +71,23 @@ export function renderArena(container, { onToast }) {
       const footEl = container.querySelector(`#arena-foot-${idx}`);
       bodyEl.innerHTML = '▌';
       footEl.innerHTML = '<span>در حال استریم...</span><span></span>';
+      let lastStreamed = { text: '', thinking: '' };
 
       try {
-        store.state.activeTarget = { type: 'provider', id: pid };
         const res = await runChatCompletion({
           messages: [
             { role: 'system', content: store.state.settings.systemPrompt },
             { role: 'user', content: prompt },
           ],
-          signal: arenaAborts[idx].signal,
+          targetOverride: { type: 'provider', id: pid },
+          signal: currentAborts[idx].signal,
+          onMeta: (meta) => {
+            if (!meta.done) {
+              footEl.innerHTML = `<span>${escHtml(meta.providerName)} / ${escHtml(meta.modelId)}</span><span>TTFT ${meta.ttftMs}ms</span>`;
+            }
+          },
           onStream: ({ text, thinking }) => {
+            lastStreamed = { text: text || '', thinking: thinking || '' };
             const tHtml = thinking
               ? `<details class="think-box" open><summary>💭 در حال تفکر...</summary><div style="margin-top:6px">${escHtml(thinking.slice(-500)).replace(/\n/g, '<br>')}</div></details>`
               : '';
@@ -92,22 +99,33 @@ export function renderArena(container, { onToast }) {
           ? `<details class="think-box"><summary>💭 فرایند تفکر مدل</summary><div style="margin-top:6px">${escHtml(res.thinking).replace(/\n/g, '<br>')}</div></details>`
           : '';
         bodyEl.innerHTML = `${finalThink}${renderMarkdown(res.text)}`;
-        const sec = Math.max(0.1, res.elapsedMs / 1000);
-        const tps = Math.round((res.tokens || 0) / sec);
-        footEl.innerHTML = `<span>${escHtml(res.provider)} / ${escHtml(res.model)}</span><span>${sec.toFixed(1)}s · ~${tps} tok/s</span>`;
+        const sec = Math.max(0.1, res.totalMs / 1000);
+        footEl.innerHTML = `<span>${escHtml(res.providerName)} / ${escHtml(res.modelId)}</span><span>TTFT ${res.ttftMs}ms · ${sec.toFixed(1)}s · ~${res.tokPerSec} tok/s</span>`;
       } catch (err) {
-        if (err.name !== 'AbortError') {
+        if (err.name === 'AbortError') {
+          if (lastStreamed.text || lastStreamed.thinking) {
+            const tHtml = lastStreamed.thinking
+              ? `<details class="think-box"><summary>💭 فرایند تفکر مدل</summary><div style="margin-top:6px">${escHtml(lastStreamed.thinking).replace(/\n/g, '<br>')}</div></details>`
+              : '';
+            bodyEl.innerHTML = `${tHtml}${renderMarkdown(lastStreamed.text)}`;
+          } else {
+            bodyEl.innerHTML = '<span class="muted">متوقف شد.</span>';
+          }
+          footEl.innerHTML = '<span>متوقف شد</span><span></span>';
+        } else {
           bodyEl.innerHTML = `<span style="color:var(--danger)">❌ ${escHtml(err.message)}</span>`;
+          footEl.innerHTML = '<span style="color:var(--danger)">خطا</span><span></span>';
         }
       }
     };
 
     try {
-      await Promise.all([runSide(0), runSide(1)]);
+      await Promise.allSettled([runSide(0), runSide(1)]);
     } finally {
-      store.state.activeTarget = prevTarget;
-      arenaAborts = [];
-      runBtn.textContent = '⚔️ مقایسه';
+      if (arenaAborts === currentAborts) {
+        arenaAborts = [];
+        runBtn.textContent = '⚔️ مقایسه';
+      }
     }
   });
 }

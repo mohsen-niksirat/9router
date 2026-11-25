@@ -121,7 +121,7 @@ function extractContentParts(content) {
   return { text, thinking };
 }
 
-async function parseSSE(res, onStream, signal) {
+async function parseSSE(res, onStream, signal, onFirstToken) {
   const reader = res.body.getReader();
   const dec = new TextDecoder('utf-8');
   let buffer = '';
@@ -129,6 +129,14 @@ async function parseSSE(res, onStream, signal) {
   let thinking = '';
   let usage = null;
   let doneSignal = false;
+  let firstTokenSeen = false;
+
+  const markFirstToken = () => {
+    if (!firstTokenSeen) {
+      firstTokenSeen = true;
+      onFirstToken?.();
+    }
+  };
 
   const processLine = (line) => {
     const t = line.trim();
@@ -141,16 +149,19 @@ async function parseSSE(res, onStream, signal) {
       const d = ev.choices?.[0]?.delta || {};
       const r = d.reasoning_content || d.reasoning || '';
       if (typeof r === 'string' && r) {
+        markFirstToken();
         thinking += r;
         onStream?.({ type: 'thinking', thinking, text: accumulated });
       }
       if (d.content) {
         const parts = extractContentParts(d.content);
         if (parts.thinking) {
+          markFirstToken();
           thinking += parts.thinking;
           onStream?.({ type: 'thinking', thinking, text: accumulated });
         }
         if (parts.text) {
+          markFirstToken();
           accumulated += parts.text;
           onStream?.({ type: 'delta', delta: parts.text, text: accumulated, thinking });
         }
@@ -180,10 +191,16 @@ async function parseSSE(res, onStream, signal) {
 
 /**
  * Send a chat completion request with live SSE streaming and automatic failover.
+ * @param {object} opts
+ * @param {Array} opts.messages
+ * @param {function} [opts.onStream]
+ * @param {function} [opts.onMeta] - Called with telemetry { providerName, modelId, ttftMs, totalMs, tokensOut, tokPerSec, done }
+ * @param {AbortSignal} [opts.signal]
+ * @param {{ type: 'provider'|'combo', id: string, model?: string }} [opts.targetOverride]
  */
-export async function runChatCompletion({ messages, onStream, signal }) {
+export async function runChatCompletion({ messages, onStream, onMeta, signal, targetOverride = null }) {
   const t0 = performance.now();
-  const target = store.state.activeTarget;
+  const target = targetOverride || store.state.activeTarget;
   let providers = [];
   let policy = 'fallback';
 
@@ -211,8 +228,10 @@ export async function runChatCompletion({ messages, onStream, signal }) {
       if (!key) break;
       triedKeys.add(key.id);
 
-      const model = prov.defaultModel || prov.models[0] || 'gpt-4o-mini';
+      const model = target?.model || prov.defaultModel || prov.models[0] || 'gpt-4o-mini';
       const url = applyCorsProxy(`${prov.baseUrl.replace(/\/+$/, '')}/chat/completions`);
+      const attemptStart = performance.now();
+      let ttftMs = null;
 
       try {
         const res = await fetch(url, {
@@ -242,6 +261,7 @@ export async function runChatCompletion({ messages, onStream, signal }) {
         let out;
         if (ct.includes('application/json') || !res.body?.getReader) {
           const data = await res.json();
+          ttftMs = Math.round(performance.now() - attemptStart);
           const parts = extractContentParts(data.choices?.[0]?.message?.content);
           out = {
             text: parts.text,
@@ -249,11 +269,37 @@ export async function runChatCompletion({ messages, onStream, signal }) {
             usage: data.usage,
           };
         } else {
-          out = await parseSSE(res, onStream, signal);
+          out = await parseSSE(res, onStream, signal, () => {
+            ttftMs = Math.round(performance.now() - attemptStart);
+            onMeta?.({
+              providerName: prov.name,
+              modelId: model,
+              ttftMs,
+              totalMs: null,
+              tokensOut: 0,
+              tokPerSec: 0,
+              done: false,
+            });
+          });
         }
 
-        const elapsedMs = Math.round(performance.now() - t0);
-        const tokens = out.usage?.total_tokens || Math.ceil(out.text.length / 4);
+        const totalMs = Math.round(performance.now() - t0);
+        if (ttftMs === null) ttftMs = totalMs;
+        const tokensOut = out.usage?.completion_tokens || Math.ceil((out.text.length + out.thinking.length) / 4);
+        const tokens = out.usage?.total_tokens || tokensOut;
+        const tokPerSec = Math.round((tokensOut / Math.max(0.05, totalMs / 1000)) * 10) / 10;
+
+        const meta = {
+          providerName: prov.name,
+          modelId: model,
+          ttftMs,
+          totalMs,
+          tokensOut,
+          tokPerSec,
+          done: true,
+        };
+        onMeta?.(meta);
+
         key.lastUsedAt = Date.now();
         key.tokens = (key.tokens || 0) + tokens;
         key.failures = 0;
@@ -264,9 +310,16 @@ export async function runChatCompletion({ messages, onStream, signal }) {
           text: out.text,
           thinking: out.thinking,
           provider: prov.name,
+          providerName: prov.name,
           model,
+          modelId: model,
           tokens,
-          elapsedMs,
+          tokensOut,
+          elapsedMs: totalMs,
+          totalMs,
+          ttftMs,
+          tokPerSec,
+          meta,
         };
       } catch (err) {
         if (err.name === 'AbortError') throw err;
@@ -285,6 +338,8 @@ export async function runChatCompletion({ messages, onStream, signal }) {
       : 'هیچ کلید API فعالی در ارائه‌دهنده‌های انتخاب‌شده وجود ندارد. لطفاً ابتدا کلید اضافه کنید.'
   );
 }
+
+export const streamChat = runChatCompletion;
 
 /**
  * Generate or Edit an image using OpenAI-compatible /images/generations or /images/edits.

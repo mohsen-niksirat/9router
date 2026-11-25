@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <title>9Router Web — Multi-Provider AI Chat & Visual Router</title>
+  <title>9Router Web - Multi-Provider AI Chat & Visual Router</title>
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#14151a">
   <link rel="stylesheet" href="css/styles.css">
@@ -19,7 +19,7 @@
         <div class="brand-logo">9R</div>
         <span>9Router Web</span>
       </div>
-      <button class="icon-btn" id="btn-theme" title="تغییر تم">◐</button>
+      <button class="icon-btn" id="btn-theme" type="button" title="تغییر تم" aria-label="تغییر تم">◐</button>
     </div>
 
     <button class="nav-item nav-new" id="btn-new-chat">＋ چت جدید</button>
@@ -30,7 +30,8 @@
     <button class="nav-item" data-tab="arena">⚔️ مقایسه مدل‌ها (Arena)</button>
 
     <div class="sessions-head">تاریخچه گفتگوها</div>
-    <input id="ses-search" class="hub-search" style="min-width:0;width:100%;padding:6px 10px;font-size:12.5px;margin-bottom:4px" placeholder="جستجو در گفتگوها...">
+    <input id="ses-search" class="hub-search" style="min-width:0;width:100%;padding:6px 10px;font-size:12.5px;margin-bottom:4px" placeholder="جستجو در گفتگوها..." aria-label="جستجو در گفتگوها">
+    <div class="folder-bar" id="folder-bar" aria-label="فیلتر پوشه‌ها"></div>
     <div class="sessions-list" id="sessions-list"></div>
 
     <div class="sidebar-foot">
@@ -45,36 +46,102 @@
   <main class="main">
     <header class="topbar">
       <div class="topbar-g">
-        <button class="icon-btn" id="btn-menu" title="منو">☰</button>
-        <button class="target-pill" onclick="document.querySelector('[data-tab=combos]').click()">
-          <span class="dot"></span>
+        <button class="icon-btn" id="btn-menu" type="button" title="منو" aria-label="باز کردن منو">☰</button>
+        <button class="target-pill" id="topbar-target-pill" type="button" onclick="document.querySelector('[data-tab=combos]').click()">
+          <span class="dot" aria-hidden="true"></span>
           <span id="active-target-label">کمبو: Smart Default</span>
         </button>
       </div>
       <div class="topbar-g">
-        <button class="btn btn-sm btn-ghost" onclick="document.querySelector('[data-tab=providers]').click()">+ کلید API</button>
+        <button class="cmd-trigger-btn" id="btn-cmd-palette" type="button" title="جستجو و دستورات (Ctrl+K)" aria-label="باز کردن پالت دستورات">
+          <span aria-hidden="true">⌘</span>
+          <span>دستورات</span>
+          <kbd class="cmd-kbd">Ctrl+K</kbd>
+        </button>
+        <button class="btn btn-sm btn-ghost" id="btn-export-md" type="button" title="خروجی Markdown گفتگو">MD</button>
+        <button class="btn btn-sm btn-ghost" id="btn-export-html" type="button" title="خروجی HTML قابل چاپ / PDF">چاپ</button>
+        <button class="btn btn-sm btn-ghost" type="button" onclick="document.querySelector('[data-tab=providers]').click()">+ کلید API</button>
       </div>
     </header>
 
     <!-- Chat View -->
     <section class="view active" id="view-chat">
-      <div class="chat-scroll" id="chat-scroll">
-        <div class="chat-col" id="chat-messages"></div>
-      </div>
+      <div class="chat-split" id="chat-split">
+        <div class="chat-main">
+          <div class="drop-overlay" id="drop-overlay" aria-hidden="true">
+            <div class="drop-overlay-card">
+              <div class="drop-overlay-icon" aria-hidden="true">📎</div>
+              <div class="drop-overlay-title">فایل یا تصویر را اینجا رها کنید</div>
+              <div class="drop-overlay-sub">پشتیبانی از تصاویر و فایل‌های متنی / کد</div>
+            </div>
+          </div>
 
-      <div class="composer-wrap">
-        <div class="composer">
-          <div class="slash-menu" id="slash-menu"></div>
-          <div class="composer-previews" id="composer-previews"></div>
-          <div class="composer-row">
-            <button class="icon-btn" id="btn-attach" title="پیوست تصویر یا فایل کد">📎</button>
-            <input type="file" id="file-input" accept="image/*,.txt,.js,.ts,.py,.json,.md,.html,.css,.sql,.csv,.yaml,.yml,.xml" multiple style="display:none">
-            <button class="icon-btn" id="btn-voice" title="ورودی صوتی (فارسی)">🎤</button>
-            <button class="mode-pill" id="btn-img-mode" title="تولید یا ویرایش تصویر">🎨 تصویر</button>
-            <textarea id="msg-input" rows="1" placeholder="پیام خود را بنویسید..."></textarea>
-            <button class="send-btn" id="send-btn" title="ارسال">↑</button>
+          <div class="chat-scroll" id="chat-scroll">
+            <div class="chat-col" id="chat-messages"></div>
+          </div>
+
+          <button class="jump-bottom-btn" id="btn-jump-bottom" type="button" aria-label="پرش به آخرین پیام" title="پرش به پایین">
+            <span aria-hidden="true">↓</span>
+            <span>پرش به پایین</span>
+          </button>
+
+          <div class="composer-wrap">
+            <div class="composer" id="composer">
+              <div class="slash-menu" id="slash-menu" role="listbox" aria-label="پرامپت‌های آماده"></div>
+              <div class="composer-previews" id="composer-previews"></div>
+
+              <div class="composer-toolbar">
+                <div class="popover-anchor">
+                  <button class="composer-pill" id="btn-quick-model" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="popover-model">
+                    <span class="dot" aria-hidden="true"></span>
+                    <span id="quick-model-label">کمبو: Smart Default</span>
+                    <span class="chev" aria-hidden="true">▾</span>
+                  </button>
+                  <div class="popover-panel" id="popover-model" role="dialog" aria-label="انتخاب سریع مدل یا کمبو"></div>
+                </div>
+
+                <div class="popover-anchor">
+                  <button class="composer-pill" id="btn-quick-params" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="popover-params" title="تنظیمات سریع دما و توکن">
+                    <span aria-hidden="true">⚙</span>
+                    <span id="quick-params-label">دما 0.7 · 4096</span>
+                  </button>
+                  <div class="popover-panel popover-params" id="popover-params" role="dialog" aria-label="پارامترهای سریع مدل">
+                    <div class="popover-head">پارامترهای پاسخ</div>
+                    <div class="param-row">
+                      <div class="param-label-row">
+                        <label for="qp-temp">Temperature (خلاقیت)</label>
+                        <output id="qp-temp-val" for="qp-temp">0.7</output>
+                      </div>
+                      <input id="qp-temp" type="range" min="0" max="2" step="0.1" value="0.7">
+                    </div>
+                    <div class="param-row">
+                      <div class="param-label-row">
+                        <label for="qp-max-tokens">Max Tokens (حداکثر توکن)</label>
+                      </div>
+                      <input id="qp-max-tokens" type="number" min="128" max="65536" step="128" value="4096" dir="ltr">
+                    </div>
+                  </div>
+                </div>
+
+                <button class="composer-pill" id="btn-web-search" type="button" aria-pressed="false" title="جستجوی وب و استناد به منابع">
+                  <span aria-hidden="true">🌐</span>
+                  <span>جستجوی وب</span>
+                </button>
+              </div>
+
+              <div class="composer-row">
+                <button class="icon-btn" id="btn-attach" type="button" title="پیوست تصویر یا فایل کد" aria-label="پیوست تصویر یا فایل کد">📎</button>
+                <input type="file" id="file-input" accept="image/*,.txt,.js,.ts,.py,.json,.md,.html,.css,.sql,.csv,.yaml,.yml,.xml" multiple style="display:none">
+                <button class="icon-btn" id="btn-voice" type="button" title="ورودی صوتی (فارسی)" aria-label="ورودی صوتی">🎤</button>
+                <button class="mode-pill" id="btn-img-mode" type="button" aria-pressed="false" title="تولید یا ویرایش تصویر">🎨 تصویر</button>
+                <textarea id="msg-input" rows="1" placeholder="پیام خود را بنویسید..." aria-label="متن پیام"></textarea>
+                <button class="send-btn" id="send-btn" type="button" title="ارسال" aria-label="ارسال پیام">↑</button>
+              </div>
+            </div>
           </div>
         </div>
+
+        <aside id="artifact-pane" class="artifact-pane" aria-hidden="true" aria-label="پنل پیش‌نمایش و ویرایش آرتیفکت"></aside>
       </div>
     </section>
 
@@ -148,7 +215,16 @@
     <h3>تنظیمات مدل و شبکه</h3>
     <div class="field"><label>System Prompt</label><textarea id="s-sys" rows="3"></textarea></div>
     <div class="field"><label>Temperature (0.0 - 2.0)</label><input id="s-temp" type="number" step="0.1" min="0" max="2"></div>
-    <div class="field"><label>CORS Proxy اختیاری (برای ارائه‌دهنده‌های بدون CORS)</label><input id="s-proxy" placeholder="https://your-worker.workers.dev/?url={url}" dir="ltr"></div>
+    <div class="field"><label for="s-proxy">CORS Proxy اختیاری (برای ارائه‌دهنده‌های بدون CORS)</label><input id="s-proxy" placeholder="https://your-worker.workers.dev/?url={url}" dir="ltr"></div>
+    <div class="field">
+      <label for="s-ws-provider">ارائه‌دهنده جستجوی وب (BYOK)</label>
+      <select id="s-ws-provider">
+        <option value="tavily">Tavily Search</option>
+        <option value="serper">Serper (Google)</option>
+        <option value="brave">Brave Search</option>
+      </select>
+    </div>
+    <div class="field"><label for="s-ws-key">کلید API جستجوی وب</label><input id="s-ws-key" type="password" placeholder="tvly-... / Serper / Brave key" dir="ltr"></div>
     <div class="modal-acts">
       <button class="btn btn-ghost" data-close-modal>لغو</button>
       <button class="btn btn-amber" id="s-save">ذخیره</button>
