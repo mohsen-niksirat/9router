@@ -9,7 +9,7 @@
 import { store, TEAM_MODES } from './store.js';
 import { escHtml, renderMarkdown } from './markdown.js';
 import { runChatCompletion } from './router.js';
-import { deriveEdges, normalizeTeamLayout, TEAM_NODE_WIDTH } from './team_graph.js';
+import { deriveEdges, normalizeTeamLayout, TEAM_NODE_WIDTH, TEAM_NODE_HEIGHT } from './team_graph.js';
 
 let selectedTeamId = null;
 let teamAbort = null;
@@ -656,6 +656,7 @@ export function renderAgentTeam(container, { onToast }) {
               <button type="button" class="btn btn-sm btn-ghost" id="btn-team-zoom-out" title="کوچک‌نمایی" aria-label="کوچک‌نمایی">−</button>
               <button type="button" class="btn btn-sm btn-ghost graph-zoom-val" id="btn-team-zoom-reset" title="بازنشانی نما (100%)" aria-label="بازنشانی نما">${Math.round(teamZoom * 100)}%</button>
               <button type="button" class="btn btn-sm btn-ghost" id="btn-team-zoom-in" title="بزرگ‌نمایی" aria-label="بزرگ‌نمایی">+</button>
+              <button type="button" class="btn btn-sm btn-ghost" id="btn-team-zoom-fit" title="برازش گراف در صفحه" aria-label="برازش گراف در صفحه">برازش</button>
             </div>
             <button type="button" class="btn btn-sm btn-ghost" id="btn-team-auto-layout" title="چیدمان خودکار نودها">✨ چیدمان خودکار</button>
             <button type="button" class="btn btn-sm btn-ghost" id="btn-add-worker">+ افزودن ایجنت</button>
@@ -872,28 +873,35 @@ export function renderAgentTeam(container, { onToast }) {
   const fitTeamCanvas = () => {
     const keys = Object.keys(layoutNodes);
     if (!keys.length) return;
+    const vw = canvasEl.clientWidth;
+    const vh = canvasEl.clientHeight;
+    if (!vw || !vh) return;
     let minX = Infinity;
     let maxX = -Infinity;
     let minY = Infinity;
+    let maxY = -Infinity;
     for (const k of keys) {
       const p = layoutNodes[k];
       if (!p) continue;
+      const nodeEl = nodesEl.querySelector(`[data-node-key="${k}"]`);
+      const w = nodeEl?.offsetWidth || TEAM_NODE_WIDTH;
+      const h = nodeEl?.offsetHeight || TEAM_NODE_HEIGHT;
       minX = Math.min(minX, p.x);
-      maxX = Math.max(maxX, p.x + TEAM_NODE_WIDTH);
+      maxX = Math.max(maxX, p.x + w);
       minY = Math.min(minY, p.y);
+      maxY = Math.max(maxY, p.y + h);
     }
+    if (!Number.isFinite(minX) || !Number.isFinite(minY)) return;
     const contentW = Math.max(TEAM_NODE_WIDTH, maxX - minX);
-    const vw = canvasEl.clientWidth || 380;
-    if (contentW + 32 > vw) {
-      teamZoom = clamp(Math.floor(((vw - 24) / contentW) * 100) / 100, 0.45, 1);
-      teamPanX = Math.round((vw - contentW * teamZoom) / 2 - minX * teamZoom);
-      teamPanY = Math.max(8, Math.round(16 - minY * teamZoom));
-    } else {
-      teamZoom = 1;
-      teamPanX = Math.round((vw - contentW) / 2 - minX);
-      teamPanY = 0;
-    }
+    const contentH = Math.max(TEAM_NODE_HEIGHT, maxY - minY);
+    const pad = 24;
+    const availW = Math.max(120, vw - pad * 2);
+    const availH = Math.max(120, vh - pad * 2);
+    teamZoom = clamp(Math.floor(Math.min(availW / contentW, availH / contentH) * 100) / 100, 0.35, 1.1);
+    teamPanX = Math.round((vw - contentW * teamZoom) / 2 - minX * teamZoom);
+    teamPanY = Math.round((vh - contentH * teamZoom) / 2 - minY * teamZoom);
     applyTeamTransform();
+    drawTeamEdges();
   };
 
   // Pointer-event node dragging (by header) & click-to-select
@@ -985,19 +993,19 @@ export function renderAgentTeam(container, { onToast }) {
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
       const factor = e.deltaY < 0 ? 1.1 : 0.9;
-      teamZoom = clamp(Math.round(teamZoom * factor * 100) / 100, 0.45, 1.6);
+      teamZoom = clamp(Math.round(teamZoom * factor * 100) / 100, 0.35, 1.6);
       applyTeamTransform();
     },
     { passive: false }
   );
 
   container.querySelector('#btn-team-zoom-in')?.addEventListener('click', () => {
-    teamZoom = clamp(Math.round((teamZoom + 0.1) * 100) / 100, 0.45, 1.6);
+    teamZoom = clamp(Math.round((teamZoom + 0.1) * 100) / 100, 0.35, 1.6);
     applyTeamTransform();
   });
 
   container.querySelector('#btn-team-zoom-out')?.addEventListener('click', () => {
-    teamZoom = clamp(Math.round((teamZoom - 0.1) * 100) / 100, 0.45, 1.6);
+    teamZoom = clamp(Math.round((teamZoom - 0.1) * 100) / 100, 0.35, 1.6);
     applyTeamTransform();
   });
 
@@ -1006,6 +1014,10 @@ export function renderAgentTeam(container, { onToast }) {
     teamPanX = 0;
     teamPanY = 0;
     applyTeamTransform();
+  });
+
+  container.querySelector('#btn-team-zoom-fit')?.addEventListener('click', () => {
+    fitTeamCanvas();
   });
 
   container.querySelector('#btn-team-auto-layout')?.addEventListener('click', () => {
@@ -1017,11 +1029,12 @@ export function renderAgentTeam(container, { onToast }) {
 
   applyTeamTransform();
   requestAnimationFrame(() => {
-    if (lastFittedTeamId !== team.id) {
+    if (lastFittedTeamId !== team.id && canvasEl.clientWidth > 0 && canvasEl.clientWidth < 560) {
       fitTeamCanvas();
       lastFittedTeamId = team.id;
+    } else {
+      drawTeamEdges();
     }
-    drawTeamEdges();
   });
 
   const resetRunGraphState = () => {

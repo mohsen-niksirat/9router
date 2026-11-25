@@ -14,6 +14,7 @@ let activeKeyHandler = null;
 let zoom = 1;
 let panX = 0;
 let panY = 0;
+let lastFittedComboId = null;
 
 function clamp(val, min, max) {
   return Math.max(min, Math.min(max, val));
@@ -66,6 +67,7 @@ export function renderComboGraph(container, { onToast, onActivateCombo }) {
           <button class="btn btn-sm btn-ghost" id="btn-zoom-out" type="button" title="کوچک‌نمایی" aria-label="کوچک‌نمایی">−</button>
           <button class="btn btn-sm btn-ghost graph-zoom-val" id="btn-zoom-reset" type="button" title="بازنشانی نما (100%)" aria-label="بازنشانی نما">${Math.round(zoom * 100)}%</button>
           <button class="btn btn-sm btn-ghost" id="btn-zoom-in" type="button" title="بزرگ‌نمایی" aria-label="بزرگ‌نمایی">+</button>
+          <button class="btn btn-sm btn-ghost" id="btn-zoom-fit" type="button" title="برازش گراف در صفحه" aria-label="برازش گراف در صفحه">برازش</button>
         </div>
         <button class="btn btn-sm btn-ghost" id="btn-auto-layout" type="button" title="چیدمان خودکار نودها">✨ چیدمان خودکار</button>
         <select id="add-node-prov" class="graph-select" aria-label="انتخاب ارائه‌دهنده برای افزودن نود">
@@ -105,6 +107,37 @@ export function renderComboGraph(container, { onToast, onActivateCombo }) {
     canvasEl.style.backgroundPosition = `${panX}px ${panY}px`;
     canvasEl.style.backgroundSize = `${22 * zoom}px ${22 * zoom}px`;
     if (zoomResetBtn) zoomResetBtn.textContent = `${Math.round(zoom * 100)}%`;
+  }
+
+  function fitComboCanvas() {
+    if (!combo.nodes.length) return;
+    const vw = canvasEl.clientWidth;
+    const vh = canvasEl.clientHeight;
+    if (!vw || !vh) return;
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const n of combo.nodes) {
+      const nodeEl = nodesEl.querySelector(`[data-node-id="${n.id}"]`);
+      const w = nodeEl?.offsetWidth || 210;
+      const h = nodeEl?.offsetHeight || 110;
+      minX = Math.min(minX, n.x);
+      maxX = Math.max(maxX, n.x + w);
+      minY = Math.min(minY, n.y);
+      maxY = Math.max(maxY, n.y + h);
+    }
+    if (!Number.isFinite(minX) || !Number.isFinite(minY)) return;
+    const contentW = Math.max(180, maxX - minX);
+    const contentH = Math.max(90, maxY - minY);
+    const pad = 24;
+    const availW = Math.max(120, vw - pad * 2);
+    const availH = Math.max(120, vh - pad * 2);
+    zoom = clamp(Math.floor(Math.min(availW / contentW, availH / contentH) * 100) / 100, 0.35, 1.1);
+    panX = Math.round((vw - contentW * zoom) / 2 - minX * zoom);
+    panY = Math.round((vh - contentH * zoom) / 2 - minY * zoom);
+    applyTransform();
+    drawEdges();
   }
 
   function clientToStage(clientX, clientY) {
@@ -556,7 +589,7 @@ export function renderComboGraph(container, { onToast, onActivateCombo }) {
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
       const factor = e.deltaY < 0 ? 1.1 : 0.9;
-      zoom = clamp(Math.round(zoom * factor * 100) / 100, 0.5, 1.6);
+      zoom = clamp(Math.round(zoom * factor * 100) / 100, 0.35, 1.6);
       applyTransform();
     },
     { passive: false }
@@ -669,6 +702,12 @@ export function renderComboGraph(container, { onToast, onActivateCombo }) {
 
   applyTransform();
   renderNodes();
+  requestAnimationFrame(() => {
+    if (lastFittedComboId !== combo.id && canvasEl.clientWidth > 0 && canvasEl.clientWidth < 560) {
+      fitComboCanvas();
+      lastFittedComboId = combo.id;
+    }
+  });
 
   // Toolbar events
   container.querySelector('#combo-select')?.addEventListener('change', (e) => {
@@ -707,12 +746,12 @@ export function renderComboGraph(container, { onToast, onActivateCombo }) {
   });
 
   container.querySelector('#btn-zoom-in')?.addEventListener('click', () => {
-    zoom = clamp(Math.round((zoom + 0.1) * 100) / 100, 0.5, 1.6);
+    zoom = clamp(Math.round((zoom + 0.1) * 100) / 100, 0.35, 1.6);
     applyTransform();
   });
 
   container.querySelector('#btn-zoom-out')?.addEventListener('click', () => {
-    zoom = clamp(Math.round((zoom - 0.1) * 100) / 100, 0.5, 1.6);
+    zoom = clamp(Math.round((zoom - 0.1) * 100) / 100, 0.35, 1.6);
     applyTransform();
   });
 
@@ -721,6 +760,10 @@ export function renderComboGraph(container, { onToast, onActivateCombo }) {
     panX = 0;
     panY = 0;
     applyTransform();
+  });
+
+  container.querySelector('#btn-zoom-fit')?.addEventListener('click', () => {
+    fitComboCanvas();
   });
 
   container.querySelector('#btn-auto-layout')?.addEventListener('click', autoLayout);
