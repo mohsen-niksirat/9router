@@ -9,11 +9,48 @@
 import { store, TEAM_MODES } from './store.js';
 import { escHtml, renderMarkdown } from './markdown.js';
 import { runChatCompletion } from './router.js';
+import { deriveEdges, normalizeTeamLayout, TEAM_NODE_WIDTH } from './team_graph.js';
 
 let selectedTeamId = null;
 let teamAbort = null;
 let activeModalCleanup = null;
 let activeSubPanel = null; // null | 'blackboard' | 'history'
+let teamZoom = 1;
+let teamPanX = 0;
+let teamPanY = 0;
+let selectedTeamNodeKey = null;
+let lastFittedTeamId = null;
+
+function clamp(val, min, max) {
+  return Math.max(min, Math.min(max, val));
+}
+
+function elIdToNodeKey(elId) {
+  if (!elId) return null;
+  if (elId === 'tnode-goal') return 'goal';
+  if (elId === 'tnode-manager') return 'manager';
+  if (elId === 'tnode-final') return 'output';
+  if (elId.startsWith('tnode-')) return elId.slice(6);
+  return elId;
+}
+
+function formatNodeTelemetryChip(res, elapsedMs) {
+  const parts = [];
+  const secs = typeof elapsedMs === 'number' && elapsedMs > 0
+    ? (elapsedMs / 1000).toFixed(1) + 's'
+    : typeof res?.ttftMs === 'number' && res.ttftMs > 0
+      ? Math.round(res.ttftMs) + 'ms'
+      : null;
+  if (secs) parts.push(`⏱ ${secs}`);
+  const totalTok = res?.usage?.total_tokens ?? res?.tokens;
+  const tps = res?.tokPerSec ?? res?.tps;
+  if (typeof totalTok === 'number' && totalTok > 0) {
+    parts.push(`${totalTok} tok`);
+  } else if (typeof tps === 'number' && tps > 0) {
+    parts.push(`${tps.toFixed(1)} tok/s`);
+  }
+  return parts.join(' • ') || '✓ انجام شد';
+}
 
 const AGENT_ICONS = ['🤖', '👑', '🧠', '🎨', '💻', '🔍', '✍️', '📊', '🛡️', '⚡', '🧪', '🏗️', '📝', '🎯', '🌐', '🔧'];
 const TEAM_ICONS = ['🚀', '🌐', '🔬', '🛡️', '✍️', '🤖', '⚡', '🎯', '🧠', '💡', '📊', '🎨'];
@@ -573,6 +610,7 @@ export function renderAgentTeam(container, { onToast }) {
   const mgrBadge = getAgentAssignmentBadge(team.manager);
   const stepsList = buildStepsList(team, activeMode);
   const runsCount = (store.state.teamRuns || []).length;
+  const layoutNodes = (team.layout?.nodes ? team.layout : normalizeTeamLayout(team)).nodes;
 
   let blackboardEntries = [];
 
@@ -604,6 +642,7 @@ export function renderAgentTeam(container, { onToast }) {
             return `<button type="button" class="studio-mode-pill ${activeMode === m ? 'active' : ''}" data-team-mode="${m}" aria-pressed="${activeMode === m ? 'true' : 'false'}">${MODE_META[m].icon} ${escHtml(label)}</button>`;
           }).join('')}
         </div>
+        <span class="team-mode-flow-hint">${escHtml(modeInfo.flow)}</span>
         ${team.description ? `<span class="team-desc-hint">${escHtml(team.description)}</span>` : ''}
       </div>
     </div>
@@ -612,42 +651,67 @@ export function renderAgentTeam(container, { onToast }) {
       <div class="team-graph-pane">
         <div class="roster-head">
           <span class="roster-title">اعضای تیم (${team.workers.length + 1})</span>
-          <button type="button" class="btn btn-sm btn-ghost" id="btn-add-worker">+ افزودن ایجنت</button>
+          <div class="team-canvas-tools">
+            <div class="graph-zoom-group" role="group" aria-label="بزرگنمایی بوم تیم">
+              <button type="button" class="btn btn-sm btn-ghost" id="btn-team-zoom-out" title="کوچک‌نمایی" aria-label="کوچک‌نمایی">−</button>
+              <button type="button" class="btn btn-sm btn-ghost graph-zoom-val" id="btn-team-zoom-reset" title="بازنشانی نما (100%)" aria-label="بازنشانی نما">${Math.round(teamZoom * 100)}%</button>
+              <button type="button" class="btn btn-sm btn-ghost" id="btn-team-zoom-in" title="بزرگ‌نمایی" aria-label="بزرگ‌نمایی">+</button>
+            </div>
+            <button type="button" class="btn btn-sm btn-ghost" id="btn-team-auto-layout" title="چیدمان خودکار نودها">✨ چیدمان خودکار</button>
+            <button type="button" class="btn btn-sm btn-ghost" id="btn-add-worker">+ افزودن ایجنت</button>
+          </div>
         </div>
 
-        <div class="team-stage">
-          <div class="t-node t-manager" id="tnode-manager">
-            <div class="t-node-head">
-              <div class="agent-ident">
-                <span class="agent-icon-badge" aria-hidden="true">${escHtml(team.manager.icon || '👑')}</span>
-                <div class="agent-titles">
-                  <div class="agent-name">${escHtml(team.manager.name || 'مدیر تیم')}</div>
-                  <div class="agent-role">${escHtml(team.manager.role || 'Orchestrator')}</div>
+        <div class="team-canvas" id="team-canvas" dir="ltr" tabindex="0" aria-label="بوم گرافیکی تیم ایجنت‌ها">
+          <div class="team-canvas-stage" id="team-canvas-stage">
+            <svg class="team-svg" id="team-svg"></svg>
+            <div class="team-nodes" id="team-nodes">
+              <div class="t-node t-goal ${selectedTeamNodeKey === 'goal' ? 'selected' : ''}" id="tnode-goal" data-node-key="goal" dir="rtl" style="left:${layoutNodes.goal?.x ?? 40}px;top:${layoutNodes.goal?.y ?? 36}px">
+                <div class="t-node-head">
+                  <span class="t-drag-grip" aria-hidden="true">⋮⋮</span>
+                  <span>💬 هدف کاربر</span>
+                </div>
+                <div class="t-node-body">
+                  <div class="t-inst">ورودی درخواست کاربر برای شروع اجرای تیم</div>
                 </div>
               </div>
-              <div class="agent-card-acts">
-                <button type="button" class="roster-act-btn" id="btn-edit-manager" title="ویرایش مدیر" aria-label="ویرایش مدیر">✏️</button>
-              </div>
-            </div>
-            <div class="t-node-body">
-              <div class="agent-badges-row">
-                <span class="agent-meta-badge ${mgrBadge.isAuto ? '' : 'assigned'}">${escHtml(mgrBadge.label)}</span>
-                <span class="agent-temp-badge" title="Temperature">🌡️ ${Number(team.manager.temperature ?? 0.7).toFixed(1)}</span>
-              </div>
-              <div class="t-inst">${escHtml(team.manager.instructions)}</div>
-            </div>
-          </div>
 
-          <div class="t-connector">↓ ${escHtml(modeInfo.flow)} ↓</div>
-
-          <div class="t-workers-row">
-            ${team.workers
-              .map((w, idx) => {
-                const badge = getAgentAssignmentBadge(w);
-                return `
-              <div class="t-node t-worker" id="tnode-${escHtml(w.id)}">
+              <div class="t-node t-manager ${selectedTeamNodeKey === 'manager' ? 'selected' : ''}" id="tnode-manager" data-node-key="manager" dir="rtl" style="left:${layoutNodes.manager?.x ?? 290}px;top:${layoutNodes.manager?.y ?? 36}px">
                 <div class="t-node-head">
                   <div class="agent-ident">
+                    <span class="t-drag-grip" aria-hidden="true">⋮⋮</span>
+                    <span class="agent-icon-badge" aria-hidden="true">${escHtml(team.manager.icon || '👑')}</span>
+                    <div class="agent-titles">
+                      <div class="agent-name">${escHtml(team.manager.name || 'مدیر تیم')}</div>
+                      <div class="agent-role">${escHtml(team.manager.role || 'Orchestrator')}</div>
+                    </div>
+                  </div>
+                  <div class="agent-card-acts">
+                    <span class="t-node-status st-paused" title="توقف HITL">⏸</span>
+                    <span class="t-node-status st-done" title="تکمیل شد">✓</span>
+                    <button type="button" class="roster-act-btn" id="btn-edit-manager" title="ویرایش مدیر" aria-label="ویرایش مدیر">✏️</button>
+                  </div>
+                </div>
+                <div class="t-node-body">
+                  <div class="agent-badges-row">
+                    <span class="agent-meta-badge ${mgrBadge.isAuto ? '' : 'assigned'}">${escHtml(mgrBadge.label)}</span>
+                    <span class="agent-temp-badge" title="Temperature">🌡️ ${Number(team.manager.temperature ?? 0.7).toFixed(1)}</span>
+                  </div>
+                  <div class="t-inst">${escHtml(team.manager.instructions)}</div>
+                  <div class="t-node-telemetry" data-telemetry-for="tnode-manager"></div>
+                </div>
+              </div>
+
+              ${team.workers
+                .map((w, idx) => {
+                  const badge = getAgentAssignmentBadge(w);
+                  const pos = layoutNodes[w.id] || { x: 40 + idx * 250, y: 206 };
+                  return `
+              <div class="t-node t-worker ${selectedTeamNodeKey === w.id ? 'selected' : ''}" id="tnode-${escHtml(w.id)}" data-node-key="${escHtml(w.id)}" dir="rtl" style="left:${pos.x}px;top:${pos.y}px">
+                <div class="t-node-head">
+                  <div class="agent-ident">
+                    <span class="t-drag-grip" aria-hidden="true">⋮⋮</span>
+                    ${activeMode === 'sequential' ? `<span class="t-order-badge" title="ترتیب اجرا">#${idx + 1}</span>` : ''}
                     <span class="agent-icon-badge" aria-hidden="true">${escHtml(w.icon || '🤖')}</span>
                     <div class="agent-titles">
                       <div class="agent-name">${escHtml(w.name || w.role)}</div>
@@ -655,6 +719,8 @@ export function renderAgentTeam(container, { onToast }) {
                     </div>
                   </div>
                   <div class="agent-card-acts">
+                    <span class="t-node-status st-paused" title="توقف HITL">⏸</span>
+                    <span class="t-node-status st-done" title="تکمیل شد">✓</span>
                     <button type="button" class="roster-act-btn" data-move-up="${escHtml(w.id)}" title="انتقال به بالا" aria-label="انتقال به بالا" ${idx === 0 ? 'disabled' : ''}>↑</button>
                     <button type="button" class="roster-act-btn" data-move-down="${escHtml(w.id)}" title="انتقال به پایین" aria-label="انتقال به پایین" ${idx === team.workers.length - 1 ? 'disabled' : ''}>↓</button>
                     <button type="button" class="roster-act-btn" data-edit-worker="${escHtml(w.id)}" title="ویرایش ایجنت" aria-label="ویرایش ایجنت">✏️</button>
@@ -667,16 +733,27 @@ export function renderAgentTeam(container, { onToast }) {
                     <span class="agent-temp-badge" title="Temperature">🌡️ ${Number(w.temperature ?? 0.7).toFixed(1)}</span>
                   </div>
                   <div class="t-inst">${escHtml(w.instructions)}</div>
+                  <div class="t-node-telemetry" data-telemetry-for="tnode-${escHtml(w.id)}"></div>
                 </div>
               </div>`;
-              })
-              .join('')}
-          </div>
+                })
+                .join('')}
 
-          <div class="t-connector">↓ جمع‌بندی و تحویل نهایی ↓</div>
-
-          <div class="t-node t-output" id="tnode-final">
-            <div class="t-node-head"><span>✨ خروجی نهایی یکپارچه</span></div>
+              <div class="t-node t-output ${selectedTeamNodeKey === 'output' ? 'selected' : ''}" id="tnode-final" data-node-key="output" dir="rtl" style="left:${layoutNodes.output?.x ?? 290}px;top:${layoutNodes.output?.y ?? 376}px">
+                <div class="t-node-head">
+                  <span class="t-drag-grip" aria-hidden="true">⋮⋮</span>
+                  <span>✨ خروجی نهایی یکپارچه</span>
+                  <div class="agent-card-acts">
+                    <span class="t-node-status st-paused" title="توقف HITL">⏸</span>
+                    <span class="t-node-status st-done" title="تکمیل شد">✓</span>
+                  </div>
+                </div>
+                <div class="t-node-body">
+                  <div class="t-inst">تجمیع، یکپارچه‌سازی و تحویل خروجی نهایی</div>
+                  <div class="t-node-telemetry" data-telemetry-for="tnode-final"></div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -717,11 +794,286 @@ export function renderAgentTeam(container, { onToast }) {
   const histBtn = container.querySelector('#btn-toggle-history');
   const bbCountEl = container.querySelector('#bb-count');
   const histCountEl = container.querySelector('#hist-count');
+  const canvasEl = container.querySelector('#team-canvas');
+  const stageEl = container.querySelector('#team-canvas-stage');
+  const svgEl = container.querySelector('#team-svg');
+  const nodesEl = container.querySelector('#team-nodes');
+  const zoomResetBtn = container.querySelector('#btn-team-zoom-reset');
+
+  let activeNodeKeySet = new Set();
+
+  const applyTeamTransform = () => {
+    stageEl.style.transform = `translate(${teamPanX}px, ${teamPanY}px) scale(${teamZoom})`;
+    canvasEl.style.backgroundPosition = `${teamPanX}px ${teamPanY}px`;
+    canvasEl.style.backgroundSize = `${22 * teamZoom}px ${22 * teamZoom}px`;
+    if (zoomResetBtn) zoomResetBtn.textContent = `${Math.round(teamZoom * 100)}%`;
+  };
+
+  const updateTeamSelection = () => {
+    nodesEl.querySelectorAll('.t-node').forEach((el) => {
+      el.classList.toggle('selected', el.dataset.nodeKey === selectedTeamNodeKey);
+    });
+  };
+
+  const drawTeamEdges = () => {
+    const edges = deriveEdges(team, activeMode);
+    const paths = [];
+    for (const edge of edges) {
+      const fromEl = nodesEl.querySelector(`[data-node-key="${edge.from}"]`);
+      const toEl = nodesEl.querySelector(`[data-node-key="${edge.to}"]`);
+      if (!fromEl || !toEl) continue;
+
+      const fx = fromEl.offsetLeft;
+      const fy = fromEl.offsetTop;
+      const fw = fromEl.offsetWidth || TEAM_NODE_WIDTH;
+      const fh = fromEl.offsetHeight || 110;
+
+      const tx = toEl.offsetLeft;
+      const ty = toEl.offsetTop;
+      const tw = toEl.offsetWidth || TEAM_NODE_WIDTH;
+      const th = toEl.offsetHeight || 110;
+
+      const fcx = fx + fw / 2;
+      const fcy = fy + fh / 2;
+      const tcx = tx + tw / 2;
+      const tcy = ty + th / 2;
+
+      let d;
+      if (Math.abs(tcy - fcy) < 52) {
+        const goRight = tcx >= fcx;
+        const x1 = goRight ? fx + fw : fx;
+        const y1 = fcy;
+        const x2 = goRight ? tx : tx + tw;
+        const y2 = tcy;
+        const dx = Math.max(40, Math.abs(x2 - x1) * 0.45);
+        d = goRight
+          ? `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`
+          : `M ${x1} ${y1} C ${x1 - dx} ${y1}, ${x2 + dx} ${y2}, ${x2} ${y2}`;
+      } else {
+        const x1 = fcx;
+        const y1 = fy + fh;
+        const x2 = tcx;
+        const y2 = ty;
+        const dy = Math.max(42, Math.abs(y2 - y1) * 0.5);
+        d = `M ${x1} ${y1} C ${x1} ${y1 + dy}, ${x2} ${y2 - dy}, ${x2} ${y2}`;
+      }
+
+      const isFlowing = activeNodeKeySet.has(edge.to);
+      paths.push(
+        `<g class="team-wire-group" data-edge-from="${escHtml(edge.from)}" data-edge-to="${escHtml(edge.to)}" data-edge-kind="${escHtml(edge.kind)}">` +
+          `<path class="wire team-wire" d="${d}" />` +
+          `<path class="team-wire-anim ${isFlowing ? 'wire-flow' : ''}" d="${d}" />` +
+        `</g>`
+      );
+    }
+    svgEl.innerHTML = paths.join('');
+  };
+
+  const fitTeamCanvas = () => {
+    const keys = Object.keys(layoutNodes);
+    if (!keys.length) return;
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    for (const k of keys) {
+      const p = layoutNodes[k];
+      if (!p) continue;
+      minX = Math.min(minX, p.x);
+      maxX = Math.max(maxX, p.x + TEAM_NODE_WIDTH);
+      minY = Math.min(minY, p.y);
+    }
+    const contentW = Math.max(TEAM_NODE_WIDTH, maxX - minX);
+    const vw = canvasEl.clientWidth || 380;
+    if (contentW + 32 > vw) {
+      teamZoom = clamp(Math.floor(((vw - 24) / contentW) * 100) / 100, 0.45, 1);
+      teamPanX = Math.round((vw - contentW * teamZoom) / 2 - minX * teamZoom);
+      teamPanY = Math.max(8, Math.round(16 - minY * teamZoom));
+    } else {
+      teamZoom = 1;
+      teamPanX = Math.round((vw - contentW) / 2 - minX);
+      teamPanY = 0;
+    }
+    applyTeamTransform();
+  };
+
+  // Pointer-event node dragging (by header) & click-to-select
+  nodesEl.querySelectorAll('.t-node').forEach((nodeEl) => {
+    const nodeKey = nodeEl.dataset.nodeKey;
+    const headEl = nodeEl.querySelector('.t-node-head');
+
+    nodeEl.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('button, select, input')) return;
+      selectedTeamNodeKey = nodeKey;
+      updateTeamSelection();
+    });
+
+    headEl?.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('button, select, input')) return;
+      e.stopPropagation();
+      selectedTeamNodeKey = nodeKey;
+      updateTeamSelection();
+
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const origX = parseFloat(nodeEl.style.left) || 0;
+      const origY = parseFloat(nodeEl.style.top) || 0;
+      let curX = origX;
+      let curY = origY;
+      let moved = false;
+
+      headEl.setPointerCapture(e.pointerId);
+
+      const onMove = (ev) => {
+        const dx = (ev.clientX - startX) / teamZoom;
+        const dy = (ev.clientY - startY) / teamZoom;
+        if (Math.abs(dx) > 2 || Math.abs(dy) > 2) moved = true;
+        curX = Math.max(10, Math.round(origX + dx));
+        curY = Math.max(10, Math.round(origY + dy));
+        nodeEl.style.left = `${curX}px`;
+        nodeEl.style.top = `${curY}px`;
+        drawTeamEdges();
+      };
+
+      const onUp = () => {
+        headEl.removeEventListener('pointermove', onMove);
+        headEl.removeEventListener('pointerup', onUp);
+        headEl.removeEventListener('pointercancel', onUp);
+        if (moved) {
+          store.setTeamNodePosition(team.id, nodeKey, curX, curY);
+        }
+      };
+
+      headEl.addEventListener('pointermove', onMove);
+      headEl.addEventListener('pointerup', onUp);
+      headEl.addEventListener('pointercancel', onUp);
+    });
+  });
+
+  // Canvas panning on empty space
+  canvasEl.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.t-node')) return;
+    selectedTeamNodeKey = null;
+    updateTeamSelection();
+
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const origPanX = teamPanX;
+    const origPanY = teamPanY;
+    canvasEl.classList.add('panning');
+    canvasEl.setPointerCapture(e.pointerId);
+
+    const onMove = (ev) => {
+      teamPanX = origPanX + (ev.clientX - startX);
+      teamPanY = origPanY + (ev.clientY - startY);
+      applyTeamTransform();
+    };
+    const onUp = () => {
+      canvasEl.classList.remove('panning');
+      canvasEl.removeEventListener('pointermove', onMove);
+      canvasEl.removeEventListener('pointerup', onUp);
+      canvasEl.removeEventListener('pointercancel', onUp);
+    };
+    canvasEl.addEventListener('pointermove', onMove);
+    canvasEl.addEventListener('pointerup', onUp);
+    canvasEl.addEventListener('pointercancel', onUp);
+  });
+
+  // Ctrl/Cmd + Wheel zoom (never hijack normal page scroll)
+  canvasEl.addEventListener(
+    'wheel',
+    (e) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.1 : 0.9;
+      teamZoom = clamp(Math.round(teamZoom * factor * 100) / 100, 0.45, 1.6);
+      applyTeamTransform();
+    },
+    { passive: false }
+  );
+
+  container.querySelector('#btn-team-zoom-in')?.addEventListener('click', () => {
+    teamZoom = clamp(Math.round((teamZoom + 0.1) * 100) / 100, 0.45, 1.6);
+    applyTeamTransform();
+  });
+
+  container.querySelector('#btn-team-zoom-out')?.addEventListener('click', () => {
+    teamZoom = clamp(Math.round((teamZoom - 0.1) * 100) / 100, 0.45, 1.6);
+    applyTeamTransform();
+  });
+
+  container.querySelector('#btn-team-zoom-reset')?.addEventListener('click', () => {
+    teamZoom = 1;
+    teamPanX = 0;
+    teamPanY = 0;
+    applyTeamTransform();
+  });
+
+  container.querySelector('#btn-team-auto-layout')?.addEventListener('click', () => {
+    store.resetTeamLayout(team.id);
+    lastFittedTeamId = null;
+    onToast('چیدمان خودکار اعمال شد');
+    renderAgentTeam(container, { onToast });
+  });
+
+  applyTeamTransform();
+  requestAnimationFrame(() => {
+    if (lastFittedTeamId !== team.id) {
+      fitTeamCanvas();
+      lastFittedTeamId = team.id;
+    }
+    drawTeamEdges();
+  });
+
+  const resetRunGraphState = () => {
+    activeNodeKeySet = new Set();
+    container.querySelectorAll('.t-node').forEach((n) => {
+      n.classList.remove('running', 'done', 'paused');
+    });
+    container.querySelectorAll('.t-node-telemetry').forEach((el) => {
+      el.textContent = '';
+      el.classList.remove('visible');
+    });
+    drawTeamEdges();
+  };
 
   const setActiveNodes = (nodeIds) => {
     container.querySelectorAll('.t-node').forEach((n) => n.classList.remove('running'));
     const list = Array.isArray(nodeIds) ? nodeIds : nodeIds ? [nodeIds] : [];
-    list.forEach((id) => container.querySelector(`#${id}`)?.classList.add('running'));
+    activeNodeKeySet = new Set();
+    list.forEach((id) => {
+      const el = container.querySelector(`#${id}`);
+      if (el) {
+        el.classList.remove('paused');
+        el.classList.add('running');
+      }
+      const key = elIdToNodeKey(id);
+      if (key) activeNodeKeySet.add(key);
+    });
+    svgEl.querySelectorAll('.team-wire-group').forEach((g) => {
+      const anim = g.querySelector('.team-wire-anim');
+      if (anim) anim.classList.toggle('wire-flow', activeNodeKeySet.has(g.dataset.edgeTo));
+    });
+  };
+
+  const markNodeDone = (nodeId, res, elapsedMs) => {
+    if (!nodeId) return;
+    const el = container.querySelector(`#${nodeId}`);
+    if (el) {
+      el.classList.remove('running', 'paused');
+      el.classList.add('done');
+      const telEl = el.querySelector('.t-node-telemetry');
+      if (telEl && res) {
+        telEl.textContent = formatNodeTelemetryChip(res, elapsedMs);
+        telEl.classList.add('visible');
+      }
+    }
+  };
+
+  const setPausedNode = (nodeId) => {
+    container.querySelectorAll('.t-node').forEach((n) => n.classList.remove('paused'));
+    if (nodeId) {
+      container.querySelector(`#${nodeId}`)?.classList.add('paused');
+    }
   };
 
   const setStepStatus = (stepId, status) => {
@@ -1022,10 +1374,11 @@ export function renderAgentTeam(container, { onToast }) {
     return card;
   }
 
-  async function executeAgentStep(agent, title, messages, { isFinal = false, parent = feedEl } = {}) {
+  async function executeAgentStep(agent, title, messages, { isFinal = false, parent = feedEl, nodeId = null } = {}) {
     const card = appendAgentCard(title, 'در حال اتصال...', { isFinal, parent });
     const body = card.querySelector('.agent-card-body');
     const pill = card.querySelector('.telemetry-pill');
+    const startedAt = Date.now();
 
     const res = await callAgent(agent, messages, {
       onStream: ({ text, thinking }) => {
@@ -1039,8 +1392,10 @@ export function renderAgentTeam(container, { onToast }) {
       signal: teamAbort.signal,
     });
 
+    const elapsedMs = Date.now() - startedAt;
     body.innerHTML = formatAgentOutput(res.text, res.thinking, false);
     pill.textContent = `✓ ${formatTelemetry(res)}`;
+    if (nodeId) markNodeDone(nodeId, res, elapsedMs);
     return { res, card };
   }
 
@@ -1050,6 +1405,7 @@ export function renderAgentTeam(container, { onToast }) {
       teamAbort = null;
       runBtn.textContent = '🚀 اجرای تیم';
       setActiveNodes(null);
+      setPausedNode(null);
       return;
     }
 
@@ -1062,6 +1418,7 @@ export function renderAgentTeam(container, { onToast }) {
     blackboardEntries = [];
     bbCountEl.textContent = '0';
     stepsList.forEach((s) => setStepStatus(s.id, null));
+    resetRunGraphState();
 
     let bestHtmlFound = null;
     let finalCard = null;
@@ -1069,14 +1426,19 @@ export function renderAgentTeam(container, { onToast }) {
     const reportSections = [`# هدف پروژه\n${goal}`];
     let hitlNote = '';
 
-    const maybePause = async (nextLabel) => {
+    const maybePause = async (nextLabel, pausedNodeId = null) => {
       if (!team.hitlPause) return { action: 'continue', feedback: '' };
-      const res = await waitForHitl(nextLabel, feedEl, teamAbort.signal);
-      if (res.feedback) {
-        hitlNote = res.feedback;
-        postBlackboard('👤 کاربر (HITL)', nextLabel, res.feedback, 'hitl');
+      setPausedNode(pausedNodeId);
+      try {
+        const res = await waitForHitl(nextLabel, feedEl, teamAbort.signal);
+        if (res.feedback) {
+          hitlNote = res.feedback;
+          postBlackboard('👤 کاربر (HITL)', nextLabel, res.feedback, 'hitl');
+        }
+        return res;
+      } finally {
+        setPausedNode(null);
       }
-      return res;
     };
 
     try {
@@ -1088,7 +1450,7 @@ export function renderAgentTeam(container, { onToast }) {
         for (let i = 0; i < team.workers.length; i++) {
           const w = team.workers[i];
           if (i > 0) {
-            const gate = await maybePause(w.name || w.role);
+            const gate = await maybePause(w.name || w.role, `tnode-${w.id}`);
             if (gate.action === 'skip') {
               setStepStatus(w.id, 'done');
               continue;
@@ -1110,7 +1472,7 @@ export function renderAgentTeam(container, { onToast }) {
               { role: 'system', content: `نقش تو: ${w.role}\nوظیفه: ${w.instructions}` },
               { role: 'user', content: `هدف اصلی کاربر:\n${goal}${prevCtx}${guidance}\n\nوظیفه خودت را کامل انجام بده.` },
             ],
-            { isFinal: isLast }
+            { isFinal: isLast, nodeId: `tnode-${w.id}` }
           );
           setStepStatus(w.id, 'done');
           outputs.push({ role: w.name || w.role, text: res.text });
@@ -1141,7 +1503,7 @@ export function renderAgentTeam(container, { onToast }) {
                 { role: 'system', content: `نقش تو: ${w.role}\nوظیفه: ${w.instructions}` },
                 { role: 'user', content: `هدف اصلی کاربر:\n${goal}\n\nبه‌صورت مستقل و با دقت بالا سهم تخصصی خودت را تولید کن.` },
               ],
-              { parent: grid }
+              { parent: grid, nodeId: `tnode-${w.id}` }
             ).then((r) => ({ worker: w, res: r.res }))
           )
         );
@@ -1163,7 +1525,7 @@ export function renderAgentTeam(container, { onToast }) {
           }
         });
 
-        await maybePause('جمع‌بندی نهایی مدیر');
+        await maybePause('جمع‌بندی نهایی مدیر', 'tnode-final');
         setActiveNodes('tnode-final');
         setStepStatus('final', 'active');
         const allWork = workerOutputs.map((o) => `### ${o.role}\n${o.text}`).join('\n\n');
@@ -1177,7 +1539,7 @@ export function renderAgentTeam(container, { onToast }) {
             { role: 'system', content: team.manager.instructions },
             { role: 'user', content: `هدف کاربر:\n${goal}\n\nخروجی‌های موازی اعضای تیم:\n${allWork}${guidance}\n\nهمه موارد را یکپارچه کن و خروجی نهایی کامل را تحویل بده.` },
           ],
-          { isFinal: true }
+          { isFinal: true, nodeId: 'tnode-final' }
         );
         setStepStatus('final', 'done');
         finalCard = card;
@@ -1189,8 +1551,9 @@ export function renderAgentTeam(container, { onToast }) {
         const { author, critics, usingManagerCriticFallback } = getDebateParticipants(team);
         const rounds = Math.max(1, Number(team.maxRounds) || 1);
         const criticsNames = critics.map((c) => c.name || c.role).join('، ');
+        const authorNodeId = author.id ? `tnode-${author.id}` : 'tnode-manager';
 
-        setActiveNodes(author.id ? `tnode-${author.id}` : 'tnode-manager');
+        setActiveNodes(authorNodeId);
         setStepStatus('draft', 'active');
         const draftStep = await executeAgentStep(
           author,
@@ -1198,7 +1561,8 @@ export function renderAgentTeam(container, { onToast }) {
           [
             { role: 'system', content: `نقش تو: ${author.role}\nوظیفه: ${author.instructions}` },
             { role: 'user', content: `هدف کاربر:\n${goal}\n\nیک پیش‌نویس کامل و باکیفیت تولید کن.` },
-          ]
+          ],
+          { nodeId: authorNodeId }
         );
         setStepStatus('draft', 'done');
         let currentDraft = draftStep.res.text;
@@ -1215,17 +1579,18 @@ export function renderAgentTeam(container, { onToast }) {
           for (let ci = 0; ci < critics.length; ci++) {
             const critic = critics[ci];
             const criticName = critic.name || critic.role;
+            const criticNodeId = critic.id ? `tnode-${critic.id}` : 'tnode-manager';
             const stepId = `review-${r}-${ci}`;
             const fallbackTag = usingManagerCriticFallback ? ' (جایگزین مدیر)' : '';
             const stepLabel = `نقد دور ${r}: ${criticName}${fallbackTag}`;
 
-            const gateReview = await maybePause(stepLabel);
+            const gateReview = await maybePause(stepLabel, criticNodeId);
             if (gateReview.action === 'skip') {
               setStepStatus(stepId, 'done');
               continue;
             }
 
-            setActiveNodes(critic.id ? `tnode-${critic.id}` : 'tnode-manager');
+            setActiveNodes(criticNodeId);
             setStepStatus(stepId, 'active');
             const guidance1 = hitlNote ? `\n\nنکته کاربر:\n${hitlNote}` : '';
             hitlNote = '';
@@ -1236,7 +1601,8 @@ export function renderAgentTeam(container, { onToast }) {
               [
                 { role: 'system', content: `نقش تو: ${critic.role}\nوظیفه: ${critic.instructions}` },
                 { role: 'user', content: `هدف کاربر:\n${goal}\n\nپیش‌نویس فعلی:\n${currentDraft}${guidance1}\n\nایرادات، نقاط ضعف و پیشنهادهای دقیق اصلاحی را فهرست کن.` },
-              ]
+              ],
+              { nodeId: criticNodeId }
             );
             setStepStatus(stepId, 'done');
             roundCritiques.push({ name: criticName, text: reviewStep.res.text });
@@ -1249,13 +1615,13 @@ export function renderAgentTeam(container, { onToast }) {
             continue;
           }
 
-          const gateRevise = await maybePause(`اصلاح دور ${r}`);
+          const gateRevise = await maybePause(`اصلاح دور ${r}`, authorNodeId);
           if (gateRevise.action === 'skip') {
             setStepStatus(`revise-${r}`, 'done');
             continue;
           }
 
-          setActiveNodes(author.id ? `tnode-${author.id}` : 'tnode-manager');
+          setActiveNodes(authorNodeId);
           setStepStatus(`revise-${r}`, 'active');
           const guidance2 = hitlNote ? `\n\nنکته کاربر:\n${hitlNote}` : '';
           hitlNote = '';
@@ -1271,7 +1637,7 @@ export function renderAgentTeam(container, { onToast }) {
               { role: 'system', content: `نقش تو: ${author.role}\nوظیفه: ${author.instructions}` },
               { role: 'user', content: `هدف کاربر:\n${goal}\n\nپیش‌نویس قبلی:\n${currentDraft}\n\n${critiquesBlock}${guidance2}\n\nنسخه اصلاح‌شده و نهایی را کامل بنویس.` },
             ],
-            { isFinal: r === rounds }
+            { isFinal: r === rounds, nodeId: authorNodeId }
           );
           setStepStatus(`revise-${r}`, 'done');
           currentDraft = reviseStep.res.text;
@@ -1293,7 +1659,8 @@ export function renderAgentTeam(container, { onToast }) {
           [
             { role: 'system', content: team.manager.instructions },
             { role: 'user', content: `هدف کاربر:\n${goal}\n\nاعضای تیم:\n${workersDesc}\n\nیک برنامه کوتاه و شفاف بنویس که هر عضو دقیقاً چه کاری انجام دهد.` },
-          ]
+          ],
+          { nodeId: 'tnode-manager' }
         );
         setStepStatus('plan', 'done');
         reportSections.push(`## برنامه مدیر\n${planStep.res.text}`);
@@ -1302,7 +1669,7 @@ export function renderAgentTeam(container, { onToast }) {
         const workerOutputs = [];
         for (const w of team.workers) {
           if (teamAbort.signal.aborted) break;
-          const gate = await maybePause(w.name || w.role);
+          const gate = await maybePause(w.name || w.role, `tnode-${w.id}`);
           if (gate.action === 'skip') {
             setStepStatus(w.id, 'done');
             continue;
@@ -1322,7 +1689,8 @@ export function renderAgentTeam(container, { onToast }) {
             [
               { role: 'system', content: `نقش تو: ${w.role}\nوظیفه: ${w.instructions}` },
               { role: 'user', content: `هدف اصلی کاربر:\n${goal}\n\nبرنامه مدیر:\n${planStep.res.text}${prevContext}${guidance}\n\nحالا وظیفه خودت را با دقت بالا انجام بده.` },
-            ]
+            ],
+            { nodeId: `tnode-${w.id}` }
           );
           setStepStatus(w.id, 'done');
           workerOutputs.push({ role: w.name || w.role, text: wStep.res.text });
@@ -1332,7 +1700,7 @@ export function renderAgentTeam(container, { onToast }) {
           if (foundHtml) bestHtmlFound = foundHtml;
         }
 
-        await maybePause('خروجی نهایی یکپارچه');
+        await maybePause('خروجی نهایی یکپارچه', 'tnode-final');
         setActiveNodes('tnode-final');
         setStepStatus('final', 'active');
         const allWork = workerOutputs.map((o) => `### ${o.role}\n${o.text}`).join('\n\n');
@@ -1346,7 +1714,7 @@ export function renderAgentTeam(container, { onToast }) {
             { role: 'system', content: team.manager.instructions },
             { role: 'user', content: `هدف کاربر:\n${goal}\n\nخروجی اعضای تیم:\n${allWork}${guidance}\n\nهمه موارد را یکپارچه کن و خروجی نهایی کامل و آماده استفاده را تحویل بده. اگر پروژه وب است، کل کد HTML/CSS/JS را در یک بلوک \`\`\`html واحد قرار بده.` },
           ],
-          { isFinal: true }
+          { isFinal: true, nodeId: 'tnode-final' }
         );
         setStepStatus('final', 'done');
         finalCard = synthStep.card;
