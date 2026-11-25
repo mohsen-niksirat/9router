@@ -1,6 +1,9 @@
 /**
- * OpenBot-Style Multi-Agent Team Studio (Builder + Orchestrator)
+ * OpenBot-Style Multi-Agent Team Studio (Builder + Live Execution Engine)
  * Cycle A: Studio Toolbar, Execution Modes, HITL Toggle, Visual Roster, Agent & Team Inspector Modals.
+ * Cycle B: 4 Orchestration Modes (manager_worker, sequential, parallel, debate_review),
+ *          targetOverride + temperature (zero activeTarget mutation), Live Telemetry,
+ *          Shared Blackboard, HITL Steering Gate, Run History & Artifact Export.
  */
 
 import { store, TEAM_MODES } from './store.js';
@@ -10,6 +13,7 @@ import { runChatCompletion } from './router.js';
 let selectedTeamId = null;
 let teamAbort = null;
 let activeModalCleanup = null;
+let activeSubPanel = null; // null | 'blackboard' | 'history'
 
 const AGENT_ICONS = ['🤖', '👑', '🧠', '🎨', '💻', '🔍', '✍️', '📊', '🛡️', '⚡', '🧪', '🏗️', '📝', '🎯', '🌐', '🔧'];
 const TEAM_ICONS = ['🚀', '🌐', '🔬', '🛡️', '✍️', '🤖', '⚡', '🎯', '🧠', '💡', '📊', '🎨'];
@@ -19,7 +23,7 @@ const MODE_META = {
   manager_worker: { icon: '👑', label: 'مدیر-متخصص', flow: 'تقسیم وظایف و هماهنگی' },
   sequential: { icon: '⛓️', label: 'ترتیبی', flow: 'اجرای زنجیره‌ای مرحله به مرحله' },
   parallel: { icon: '⚡', label: 'موازی', flow: 'اجرای همزمان متخصص‌ها' },
-  debate_review: { icon: '🔄', label: 'نقد و بازبینی', flow: 'چاپ اولیه، نقد و اصلاح' },
+  debate_review: { icon: '🔄', label: 'نقد و بازبینی', flow: 'تولید، نقد و اصلاح' },
 };
 
 function maskKeyLabel(keyObj, idx) {
@@ -41,20 +45,50 @@ function getAgentAssignmentBadge(agent) {
   return { label: `${prov.name} / ${modelName}${keyPart}`, isAuto: false };
 }
 
-async function callAgent(providerId, messages, onStream, signal) {
-  const prevTarget = store.state.activeTarget;
-  try {
-    const chosenProv =
-      store.state.providers.find((p) => p.id === providerId && p.keys.some((k) => k.status !== 'dead')) ||
-      store.state.providers.find((p) => p.keys.some((k) => k.status !== 'dead'));
-    if (!chosenProv) {
-      throw new Error('هیچ کلید API فعالی پیدا نشد. ابتدا از بخش «ارائه‌دهنده‌ها و کلیدها» یک کلید اضافه کنید.');
-    }
-    store.state.activeTarget = { type: 'provider', id: chosenProv.id };
-    return await runChatCompletion({ messages, onStream, signal });
-  } finally {
-    store.state.activeTarget = prevTarget;
+function formatTelemetry(meta) {
+  if (!meta) return 'در حال اتصال...';
+  const parts = [];
+  const provider = meta.provider || meta.providerName;
+  const model = meta.model || meta.modelId;
+  const tps = meta.tokPerSec ?? meta.tps;
+  if (provider || model) {
+    parts.push(`${provider || ''}${provider && model ? ' / ' : ''}${model || ''}`);
   }
+  if (typeof tps === 'number' && tps > 0) {
+    parts.push(`${tps.toFixed(1)} tok/s`);
+  }
+  if (typeof meta.ttftMs === 'number' && meta.ttftMs > 0) {
+    parts.push(`${Math.round(meta.ttftMs)}ms`);
+  }
+  return parts.join(' | ') || 'در حال نوشتن...';
+}
+
+async function callAgent(agent, messages, { onStream, onMeta, signal }) {
+  const hasActiveKey = store.state.providers.some((p) => (p.keys || []).some((k) => k.status !== 'dead'));
+  if (!hasActiveKey) {
+    throw new Error('هیچ کلید API فعالی پیدا نشد. ابتدا از بخش «ارائه‌دهنده‌ها و کلیدها» یک کلید اضافه کنید.');
+  }
+  const targetOverride = agent?.providerId
+    ? {
+        type: 'provider',
+        id: agent.providerId,
+        model: agent.model || undefined,
+        keyId: agent.keyId || undefined,
+      }
+    : undefined;
+
+  const temperature = typeof agent?.temperature === 'number' && !Number.isNaN(agent.temperature)
+    ? agent.temperature
+    : undefined;
+
+  return await runChatCompletion({
+    messages,
+    targetOverride,
+    temperature,
+    onStream,
+    onMeta,
+    signal,
+  });
 }
 
 function extractHtmlCode(text) {
@@ -77,6 +111,125 @@ function formatAgentOutput(text, thinking, isLive = false) {
     : '';
   const bodyHtml = text ? renderMarkdown(text) : (isLive && !thinking ? 'در حال اتصال...' : '');
   return `${thinkHtml}${bodyHtml}${isLive ? ' ▌' : ''}`;
+}
+
+function buildStepsList(team, mode) {
+  if (mode === 'sequential') {
+    return team.workers.map((w, i) => ({ id: w.id, label: `${i + 1}. ${w.name || w.role}` }));
+  }
+  if (mode === 'parallel') {
+    return [
+      { id: 'parallel-workers', label: `⚡ اجرای همزمان (${team.workers.length})` },
+      { id: 'final', label: '✨ جمع‌بندی مدیر' },
+    ];
+  }
+  if (mode === 'debate_review') {
+    const rounds = Math.max(1, Number(team.maxRounds) || 1);
+    const steps = [{ id: 'draft', label: '۱. پیش‌نویس اولیه' }];
+    for (let r = 1; r <= rounds; r++) {
+      steps.push({ id: `review-${r}`, label: `نقد دور ${r}` });
+      steps.push({ id: `revise-${r}`, label: `اصلاح دور ${r}` });
+    }
+    return steps;
+  }
+  return [
+    { id: 'plan', label: '① برنامه‌ریزی مدیر' },
+    ...team.workers.map((w, i) => ({ id: w.id, label: `${i + 2}. ${w.name || w.role}` })),
+    { id: 'final', label: '✨ خروجی نهایی' },
+  ];
+}
+
+function attachArtifactActions(parentEl, { finalHtml, fullReportMd, finalText, onToast }) {
+  const acts = document.createElement('div');
+  acts.className = 'final-actions';
+  acts.innerHTML = `
+    ${finalHtml ? '<button type="button" class="btn btn-amber btn-sm" data-act="preview">👁️ پیش‌نمایش زنده</button>' : ''}
+    ${finalHtml ? '<button type="button" class="btn btn-ok btn-sm" data-act="dl-html">⬇️ .html</button>' : ''}
+    <button type="button" class="btn btn-ghost btn-sm" data-act="dl-md">📄 .md</button>
+    <button type="button" class="btn btn-ghost btn-sm" data-act="copy">📋 کپی</button>
+  `;
+  parentEl.appendChild(acts);
+  acts.querySelector('[data-act="preview"]')?.addEventListener('click', () => window.__openHtmlPreview?.(finalHtml));
+  acts.querySelector('[data-act="dl-html"]')?.addEventListener('click', () => {
+    const blob = new Blob([finalHtml], { type: 'text/html;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'index.html';
+    a.click();
+  });
+  acts.querySelector('[data-act="dl-md"]')?.addEventListener('click', () => {
+    const blob = new Blob([fullReportMd], { type: 'text/markdown;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `9router-team-output-${Date.now()}.md`;
+    a.click();
+  });
+  acts.querySelector('[data-act="copy"]')?.addEventListener('click', () => {
+    navigator.clipboard.writeText(finalHtml || finalText || fullReportMd).then(() => onToast('کپی شد ✓'));
+  });
+}
+
+function waitForHitl(nextLabel, feedEl, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      const err = new Error('Aborted');
+      err.name = 'AbortError';
+      return reject(err);
+    }
+
+    const bar = document.createElement('div');
+    bar.className = 'hitl-bar';
+    bar.setAttribute('role', 'region');
+    bar.setAttribute('aria-label', 'کنترل انسانی بین مراحل');
+    bar.innerHTML = `
+      <div class="hitl-bar-head">
+        <span class="hitl-badge">⏸️ توقف بین مراحل</span>
+        <span class="hitl-next-label">مرحله بعدی: <b>${escHtml(nextLabel)}</b></span>
+      </div>
+      <div class="hitl-bar-controls">
+        <input type="text" class="hitl-input" placeholder="تزریق دستور یا راهنمایی برای مرحله بعد (اختیاری)..." aria-label="تزریق دستور" />
+        <button type="button" class="btn btn-amber btn-sm" data-hitl="continue">▶️ ادامه</button>
+        <button type="button" class="btn btn-ok btn-sm" data-hitl="inject">💬 تزریق دستور</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-hitl="skip">⏭️ رد شدن</button>
+      </div>
+    `;
+    feedEl.appendChild(bar);
+    feedEl.scrollTop = feedEl.scrollHeight;
+
+    const input = bar.querySelector('.hitl-input');
+    input.focus();
+
+    const onAbort = () => {
+      bar.remove();
+      const err = new Error('Aborted');
+      err.name = 'AbortError';
+      reject(err);
+    };
+
+    const finish = (action, feedback = '') => {
+      signal?.removeEventListener('abort', onAbort);
+      bar.classList.add('resolved');
+      bar.innerHTML = `<div class="hitl-resolved-note">${
+        action === 'skip'
+          ? `⏭️ مرحله «${escHtml(nextLabel)}» رد شد.`
+          : feedback
+            ? `💬 دستور تزریق شد: «${escHtml(feedback)}»`
+            : `▶️ ادامه به مرحله «${escHtml(nextLabel)}» تایید شد.`
+      }</div>`;
+      resolve({ action, feedback });
+    };
+
+    signal?.addEventListener('abort', onAbort, { once: true });
+    bar.querySelector('[data-hitl="continue"]').addEventListener('click', () => finish('continue', input.value.trim()));
+    bar.querySelector('[data-hitl="inject"]').addEventListener('click', () => finish('continue', input.value.trim()));
+    bar.querySelector('[data-hitl="skip"]').addEventListener('click', () => finish('skip', ''));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        finish('continue', input.value.trim());
+      }
+    });
+  });
 }
 
 function closeActiveModal() {
@@ -405,12 +558,10 @@ export function renderAgentTeam(container, { onToast }) {
   const activeMode = MODE_META[team.mode] ? team.mode : 'manager_worker';
   const modeInfo = MODE_META[activeMode];
   const mgrBadge = getAgentAssignmentBadge(team.manager);
+  const stepsList = buildStepsList(team, activeMode);
+  const runsCount = (store.state.teamRuns || []).length;
 
-  const stepsList = [
-    { id: 'plan', label: '① برنامه‌ریزی مدیر' },
-    ...team.workers.map((w, i) => ({ id: w.id, label: `${i + 2}. ${w.name || w.role}` })),
-    { id: 'final', label: '✨ خروجی نهایی' },
-  ];
+  let blackboardEntries = [];
 
   container.innerHTML = `
     <div class="team-studio-toolbar">
@@ -519,8 +670,21 @@ export function renderAgentTeam(container, { onToast }) {
 
       <div class="team-feed-pane">
         <div class="team-steps-bar" id="team-steps-bar">
-          ${stepsList.map((s) => `<span class="step-chip" data-step="${escHtml(s.id)}">${escHtml(s.label)}</span>`).join('')}
+          <div class="steps-chips-wrap">
+            ${stepsList.map((s) => `<span class="step-chip" data-step="${escHtml(s.id)}">${escHtml(s.label)}</span>`).join('')}
+          </div>
+          <div class="feed-panel-toggles">
+            <button type="button" class="feed-sub-btn ${activeSubPanel === 'blackboard' ? 'active' : ''}" id="btn-toggle-blackboard" aria-expanded="${activeSubPanel === 'blackboard' ? 'true' : 'false'}">
+              📋 تخته سیاه <span class="sub-count" id="bb-count">0</span>
+            </button>
+            <button type="button" class="feed-sub-btn ${activeSubPanel === 'history' ? 'active' : ''}" id="btn-toggle-history" aria-expanded="${activeSubPanel === 'history' ? 'true' : 'false'}">
+              🕘 تاریخچه <span class="sub-count" id="hist-count">${runsCount}</span>
+            </button>
+          </div>
         </div>
+
+        <div class="team-subpanel ${activeSubPanel ? 'open' : ''}" id="team-subpanel"></div>
+
         <div class="team-feed" id="team-feed">
           <div class="empty-box" style="margin:auto">
             یک درخواست بنویس (مثلاً: <b>«یک صفحه فرود مدرن برای فروشگاه لوازم ورزشی با HTML/CSS/JS بساز»</b>) تا مراحل کار تیم را زنده ببینی و خروجی نهایی را پیش‌نمایش و دانلود کنی.
@@ -534,9 +698,17 @@ export function renderAgentTeam(container, { onToast }) {
     </div>
   `;
 
-  const setActiveNode = (nodeId) => {
+  const feedEl = container.querySelector('#team-feed');
+  const subPanelEl = container.querySelector('#team-subpanel');
+  const bbBtn = container.querySelector('#btn-toggle-blackboard');
+  const histBtn = container.querySelector('#btn-toggle-history');
+  const bbCountEl = container.querySelector('#bb-count');
+  const histCountEl = container.querySelector('#hist-count');
+
+  const setActiveNodes = (nodeIds) => {
     container.querySelectorAll('.t-node').forEach((n) => n.classList.remove('running'));
-    if (nodeId) container.querySelector(`#${nodeId}`)?.classList.add('running');
+    const list = Array.isArray(nodeIds) ? nodeIds : nodeIds ? [nodeIds] : [];
+    list.forEach((id) => container.querySelector(`#${id}`)?.classList.add('running'));
   };
 
   const setStepStatus = (stepId, status) => {
@@ -545,6 +717,147 @@ export function renderAgentTeam(container, { onToast }) {
     el.classList.remove('active', 'done');
     if (status) el.classList.add(status);
   };
+
+  const renderSubPanel = () => {
+    bbBtn.classList.toggle('active', activeSubPanel === 'blackboard');
+    bbBtn.setAttribute('aria-expanded', activeSubPanel === 'blackboard' ? 'true' : 'false');
+    histBtn.classList.toggle('active', activeSubPanel === 'history');
+    histBtn.setAttribute('aria-expanded', activeSubPanel === 'history' ? 'true' : 'false');
+
+    if (!activeSubPanel) {
+      subPanelEl.classList.remove('open');
+      subPanelEl.innerHTML = '';
+      return;
+    }
+
+    subPanelEl.classList.add('open');
+
+    if (activeSubPanel === 'blackboard') {
+      subPanelEl.innerHTML = `
+        <div class="subpanel-head">
+          <span>📋 تخته سیاه اشتراکی (پیام‌ها و دست‌به‌دست شدن‌ها)</span>
+          <button type="button" class="icon-btn subpanel-close" aria-label="بستن">×</button>
+        </div>
+        <div class="blackboard-list">
+          ${
+            blackboardEntries.length
+              ? blackboardEntries
+                  .map(
+                    (e) => `
+              <div class="bb-item ${e.kind === 'hitl' ? 'bb-hitl' : ''}">
+                <div class="bb-meta">
+                  <span class="bb-route">${escHtml(e.from)} ➔ ${escHtml(e.to)}</span>
+                  <span class="bb-time">${escHtml(e.time)}</span>
+                </div>
+                <div class="bb-text">${escHtml(e.summary)}</div>
+              </div>`
+                  )
+                  .join('')
+              : `<div class="subpanel-empty">هنوز پیامی بین ایجنت‌ها ثبت نشده است. پس از اجرای تیم، handoffها اینجا نمایش داده می‌شوند.</div>`
+          }
+        </div>
+      `;
+      subPanelEl.querySelector('.subpanel-close').addEventListener('click', () => {
+        activeSubPanel = null;
+        renderSubPanel();
+      });
+      return;
+    }
+
+    const runs = store.state.teamRuns || [];
+    histCountEl.textContent = String(runs.length);
+    subPanelEl.innerHTML = `
+      <div class="subpanel-head">
+        <span>🕘 تاریخچه اجراهای تیم (${runs.length})</span>
+        <button type="button" class="icon-btn subpanel-close" aria-label="بستن">×</button>
+      </div>
+      <div class="history-list">
+        ${
+          runs.length
+            ? runs
+                .map((r) => {
+                  const mLabel = TEAM_MODES?.[r.mode]?.labelFa || MODE_META[r.mode]?.label || r.mode || '';
+                  const dt = r.createdAt ? new Date(r.createdAt).toLocaleString('fa-IR') : '';
+                  return `
+              <div class="hist-item" data-run-id="${escHtml(r.id)}">
+                <div class="hist-main">
+                  <div class="hist-goal">${escHtml(r.goal || 'بدون عنوان')}</div>
+                  <div class="hist-meta">${escHtml(r.teamName || '')} | ${escHtml(mLabel)} | ${escHtml(dt)}</div>
+                </div>
+                <div class="hist-acts">
+                  <button type="button" class="btn btn-sm btn-ghost" data-load-run="${escHtml(r.id)}">نمایش</button>
+                  <button type="button" class="roster-act-btn danger" data-del-run="${escHtml(r.id)}" title="حذف از تاریخچه" aria-label="حذف از تاریخچه">🗑️</button>
+                </div>
+              </div>`;
+                })
+                .join('')
+            : `<div class="subpanel-empty">هنوز هیچ اجرایی در تاریخچه ذخیره نشده است.</div>`
+        }
+      </div>
+    `;
+
+    subPanelEl.querySelector('.subpanel-close').addEventListener('click', () => {
+      activeSubPanel = null;
+      renderSubPanel();
+    });
+
+    subPanelEl.querySelectorAll('[data-load-run]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const run = (store.state.teamRuns || []).find((x) => x.id === btn.dataset.loadRun);
+        if (!run) return;
+        feedEl.innerHTML = '';
+        const card = document.createElement('details');
+        card.className = 'agent-card final-card';
+        card.open = true;
+        card.innerHTML = `<summary><b>🕘 ${escHtml(run.teamName || 'اجرای ذخیره شده')}: ${escHtml((run.goal || '').slice(0, 60))}</b><span class="stat-pill">${escHtml(TEAM_MODES?.[run.mode]?.labelFa || run.mode || '')}</span></summary><div class="agent-card-body">${renderMarkdown(run.finalText || run.fullReportMd || '')}</div>`;
+        feedEl.appendChild(card);
+        attachArtifactActions(card, {
+          finalHtml: run.finalHtml,
+          fullReportMd: run.fullReportMd || run.finalText || '',
+          finalText: run.finalText || '',
+          onToast,
+        });
+        if (Array.isArray(run.blackboard)) {
+          blackboardEntries = run.blackboard;
+          bbCountEl.textContent = String(blackboardEntries.length);
+        }
+        activeSubPanel = null;
+        renderSubPanel();
+      });
+    });
+
+    subPanelEl.querySelectorAll('[data-del-run]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (store.deleteTeamRun(btn.dataset.delRun)) {
+          onToast('از تاریخچه حذف شد');
+          renderSubPanel();
+        }
+      });
+    });
+  };
+
+  const postBlackboard = (from, to, summary, kind = 'handoff') => {
+    const clean = String(summary || '').replace(/\s+/g, ' ').trim().slice(0, 180);
+    blackboardEntries.push({
+      from,
+      to,
+      summary: clean || 'خروجی ثبت شد',
+      kind,
+      time: new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    });
+    bbCountEl.textContent = String(blackboardEntries.length);
+    if (activeSubPanel === 'blackboard') renderSubPanel();
+  };
+
+  bbBtn.addEventListener('click', () => {
+    activeSubPanel = activeSubPanel === 'blackboard' ? null : 'blackboard';
+    renderSubPanel();
+  });
+  histBtn.addEventListener('click', () => {
+    activeSubPanel = activeSubPanel === 'history' ? null : 'history';
+    renderSubPanel();
+  });
+  renderSubPanel();
 
   // ─── Studio Toolbar Actions ───────────────────────────────
   container.querySelector('#team-select').addEventListener('change', (e) => {
@@ -683,18 +996,39 @@ export function renderAgentTeam(container, { onToast }) {
     });
   });
 
-  // ─── Existing Run Engine (Overhauled in Cycle B) ──────────
+  // ─── Cycle B: Live OpenBot Execution Engine ───────────────
   const runBtn = container.querySelector('#btn-run-team');
-  const feedEl = container.querySelector('#team-feed');
 
-  function appendAgentCard(title, badge, isFinal = false) {
+  function appendAgentCard(title, badge, { isFinal = false, parent = feedEl } = {}) {
     const card = document.createElement('details');
     card.className = `agent-card ${isFinal ? 'final-card' : ''}`;
     card.open = true;
-    card.innerHTML = `<summary><b>${escHtml(title)}</b><span class="stat-pill">${escHtml(badge)}</span></summary><div class="agent-card-body">▌</div>`;
-    feedEl.appendChild(card);
+    card.innerHTML = `<summary><b>${escHtml(title)}</b><span class="stat-pill telemetry-pill">${escHtml(badge)}</span></summary><div class="agent-card-body">▌</div>`;
+    parent.appendChild(card);
     feedEl.scrollTop = feedEl.scrollHeight;
     return card;
+  }
+
+  async function executeAgentStep(agent, title, messages, { isFinal = false, parent = feedEl } = {}) {
+    const card = appendAgentCard(title, 'در حال اتصال...', { isFinal, parent });
+    const body = card.querySelector('.agent-card-body');
+    const pill = card.querySelector('.telemetry-pill');
+
+    const res = await callAgent(agent, messages, {
+      onStream: ({ text, thinking }) => {
+        body.innerHTML = formatAgentOutput(text, thinking, true);
+        body.scrollTop = body.scrollHeight;
+        feedEl.scrollTop = feedEl.scrollHeight;
+      },
+      onMeta: (meta) => {
+        pill.textContent = formatTelemetry(meta);
+      },
+      signal: teamAbort.signal,
+    });
+
+    body.innerHTML = formatAgentOutput(res.text, res.thinking, false);
+    pill.textContent = `✓ ${formatTelemetry(res)}`;
+    return { res, card };
   }
 
   runBtn.addEventListener('click', async () => {
@@ -702,7 +1036,7 @@ export function renderAgentTeam(container, { onToast }) {
       teamAbort.abort();
       teamAbort = null;
       runBtn.textContent = '🚀 اجرای تیم';
-      setActiveNode(null);
+      setActiveNodes(null);
       return;
     }
 
@@ -712,114 +1046,303 @@ export function renderAgentTeam(container, { onToast }) {
     teamAbort = new AbortController();
     runBtn.textContent = '■ توقف';
     feedEl.innerHTML = '';
+    blackboardEntries = [];
+    bbCountEl.textContent = '0';
     stepsList.forEach((s) => setStepStatus(s.id, null));
 
     let bestHtmlFound = null;
+    let finalCard = null;
+    let finalText = '';
+    const reportSections = [`# هدف پروژه\n${goal}`];
+    let hitlNote = '';
+
+    const maybePause = async (nextLabel) => {
+      if (!team.hitlPause) return { action: 'continue', feedback: '' };
+      const res = await waitForHitl(nextLabel, feedEl, teamAbort.signal);
+      if (res.feedback) {
+        hitlNote = res.feedback;
+        postBlackboard('👤 کاربر (HITL)', nextLabel, res.feedback, 'hitl');
+      }
+      return res;
+    };
 
     try {
-      // Phase 1: Manager Plan
-      setActiveNode('tnode-manager');
-      setStepStatus('plan', 'active');
-      const mgrCard = appendAgentCard(`${team.manager.icon || '👑'} ${team.manager.name || 'مدیر تیم'}: برنامه‌ریزی`, 'در حال نوشتن...');
-      const mgrBody = mgrCard.querySelector('.agent-card-body');
-      const workersDesc = team.workers.map((w, i) => `${i + 1}. ${w.name || w.role} (${w.role}): ${w.instructions}`).join('\n');
+      postBlackboard('👤 کاربر', team.name, goal, 'handoff');
 
-      const planRes = await callAgent(
-        team.manager.providerId,
-        [
-          { role: 'system', content: team.manager.instructions },
-          { role: 'user', content: `هدف کاربر:\n${goal}\n\nاعضای تیم:\n${workersDesc}\n\nیک برنامه کوتاه و شفاف بنویس که هر عضو دقیقاً چه کاری انجام دهد.` },
-        ],
-        ({ text, thinking }) => { mgrBody.innerHTML = formatAgentOutput(text, thinking, true); mgrBody.scrollTop = mgrBody.scrollHeight; },
-        teamAbort.signal
-      );
-      mgrBody.innerHTML = formatAgentOutput(planRes.text, planRes.thinking, false);
-      mgrCard.querySelector('.stat-pill').textContent = `✓ ${planRes.provider} / ${planRes.model}`;
-      setStepStatus('plan', 'done');
+      if (activeMode === 'sequential') {
+        // ─── Mode 2: Sequential Pipeline ─────────────────────
+        const outputs = [];
+        for (let i = 0; i < team.workers.length; i++) {
+          const w = team.workers[i];
+          if (i > 0) {
+            const gate = await maybePause(w.name || w.role);
+            if (gate.action === 'skip') {
+              setStepStatus(w.id, 'done');
+              continue;
+            }
+          }
+          setActiveNodes(`tnode-${w.id}`);
+          setStepStatus(w.id, 'active');
+          const prevCtx = outputs.length
+            ? `\n\nخروجی مراحل قبلی:\n${outputs.map((o) => `### ${o.role}\n${o.text}`).join('\n\n')}`
+            : '';
+          const guidance = hitlNote ? `\n\nراهنمایی مستقیم کاربر برای این مرحله:\n${hitlNote}` : '';
+          hitlNote = '';
 
-      // Phase 2: Workers execute
-      const workerOutputs = [];
-      for (const w of team.workers) {
-        if (teamAbort.signal.aborted) break;
-        setActiveNode(`tnode-${w.id}`);
-        setStepStatus(w.id, 'active');
-        const wCard = appendAgentCard(`${w.icon || '🤖'} ${w.name || w.role}`, 'در حال نوشتن...');
-        const wBody = wCard.querySelector('.agent-card-body');
+          const isLast = i === team.workers.length - 1;
+          const { res, card } = await executeAgentStep(
+            w,
+            `${w.icon || '🤖'} ${w.name || w.role}`,
+            [
+              { role: 'system', content: `نقش تو: ${w.role}\nوظیفه: ${w.instructions}` },
+              { role: 'user', content: `هدف اصلی کاربر:\n${goal}${prevCtx}${guidance}\n\nوظیفه خودت را کامل انجام بده.` },
+            ],
+            { isFinal: isLast }
+          );
+          setStepStatus(w.id, 'done');
+          outputs.push({ role: w.name || w.role, text: res.text });
+          reportSections.push(`## ${w.name || w.role}\n${res.text}`);
+          postBlackboard(w.name || w.role, team.workers[i + 1]?.name || 'خروجی نهایی', res.text);
+          const foundHtml = extractHtmlCode(res.text);
+          if (foundHtml) bestHtmlFound = foundHtml;
+          if (isLast) {
+            finalCard = card;
+            finalText = res.text;
+          }
+        }
+      } else if (activeMode === 'parallel') {
+        // ─── Mode 3: Parallel Fan-out / Fan-in ───────────────
+        setActiveNodes(team.workers.map((w) => `tnode-${w.id}`));
+        setStepStatus('parallel-workers', 'active');
 
-        const prevContext = workerOutputs.length
-          ? `\n\nخروجی اعضای قبلی تیم:\n${workerOutputs.map((o) => `### ${o.role}\n${o.text}`).join('\n\n')}`
-          : '';
+        const grid = document.createElement('div');
+        grid.className = 'parallel-grid';
+        feedEl.appendChild(grid);
 
-        const wRes = await callAgent(
-          w.providerId,
-          [
-            { role: 'system', content: `نقش تو: ${w.role}\nوظیفه: ${w.instructions}` },
-            { role: 'user', content: `هدف اصلی کاربر:\n${goal}\n\nبرنامه مدیر:\n${planRes.text}${prevContext}\n\nحالا وظیفه خودت را با دقت بالا انجام بده.` },
-          ],
-          ({ text, thinking }) => { wBody.innerHTML = formatAgentOutput(text, thinking, true); wBody.scrollTop = wBody.scrollHeight; feedEl.scrollTop = feedEl.scrollHeight; },
-          teamAbort.signal
+        const settled = await Promise.allSettled(
+          team.workers.map((w) =>
+            executeAgentStep(
+              w,
+              `${w.icon || '🤖'} ${w.name || w.role}`,
+              [
+                { role: 'system', content: `نقش تو: ${w.role}\nوظیفه: ${w.instructions}` },
+                { role: 'user', content: `هدف اصلی کاربر:\n${goal}\n\nبه‌صورت مستقل و با دقت بالا سهم تخصصی خودت را تولید کن.` },
+              ],
+              { parent: grid }
+            ).then((r) => ({ worker: w, res: r.res }))
+          )
         );
-        wBody.innerHTML = formatAgentOutput(wRes.text, wRes.thinking, false);
-        wCard.querySelector('.stat-pill').textContent = `✓ ${wRes.provider} / ${wRes.model}`;
-        setStepStatus(w.id, 'done');
-        workerOutputs.push({ role: w.name || w.role, text: wRes.text });
-        const foundHtml = extractHtmlCode(wRes.text);
-        if (foundHtml) bestHtmlFound = foundHtml;
+        setStepStatus('parallel-workers', 'done');
+
+        const workerOutputs = [];
+        settled.forEach((item, idx) => {
+          const w = team.workers[idx];
+          if (item.status === 'fulfilled') {
+            const text = item.value.res.text;
+            workerOutputs.push({ role: w.name || w.role, text });
+            reportSections.push(`## ${w.name || w.role}\n${text}`);
+            postBlackboard(w.name || w.role, team.manager.name || 'مدیر تیم', text);
+            const foundHtml = extractHtmlCode(text);
+            if (foundHtml) bestHtmlFound = foundHtml;
+          } else {
+            const msg = item.reason?.message || 'خطا در اجرا';
+            postBlackboard(w.name || w.role, team.manager.name || 'مدیر تیم', `خطا: ${msg}`);
+          }
+        });
+
+        await maybePause('جمع‌بندی نهایی مدیر');
+        setActiveNodes('tnode-final');
+        setStepStatus('final', 'active');
+        const allWork = workerOutputs.map((o) => `### ${o.role}\n${o.text}`).join('\n\n');
+        const guidance = hitlNote ? `\n\nراهنمایی کاربر:\n${hitlNote}` : '';
+        hitlNote = '';
+
+        const { res, card } = await executeAgentStep(
+          team.manager,
+          `✨ جمع‌بندی نهایی (${team.manager.name || 'مدیر تیم'})`,
+          [
+            { role: 'system', content: team.manager.instructions },
+            { role: 'user', content: `هدف کاربر:\n${goal}\n\nخروجی‌های موازی اعضای تیم:\n${allWork}${guidance}\n\nهمه موارد را یکپارچه کن و خروجی نهایی کامل را تحویل بده.` },
+          ],
+          { isFinal: true }
+        );
+        setStepStatus('final', 'done');
+        finalCard = card;
+        finalText = res.text;
+        reportSections.push(`## خروجی نهایی\n${res.text}`);
+        postBlackboard(team.manager.name || 'مدیر تیم', 'خروجی نهایی', res.text);
+      } else if (activeMode === 'debate_review') {
+        // ─── Mode 4: Debate / Critic Review Loop ─────────────
+        const author = team.workers[0] || team.manager;
+        const critic = team.workers[1] || team.manager;
+        const rounds = Math.max(1, Number(team.maxRounds) || 1);
+
+        setActiveNodes(author.id ? `tnode-${author.id}` : 'tnode-manager');
+        setStepStatus('draft', 'active');
+        const draftStep = await executeAgentStep(
+          author,
+          `${author.icon || '✍️'} ${author.name || author.role}: پیش‌نویس اولیه`,
+          [
+            { role: 'system', content: `نقش تو: ${author.role}\nوظیفه: ${author.instructions}` },
+            { role: 'user', content: `هدف کاربر:\n${goal}\n\nیک پیش‌نویس کامل و باکیفیت تولید کن.` },
+          ]
+        );
+        setStepStatus('draft', 'done');
+        let currentDraft = draftStep.res.text;
+        finalCard = draftStep.card;
+        finalText = currentDraft;
+        reportSections.push(`## پیش‌نویس اولیه (${author.name || author.role})\n${currentDraft}`);
+        postBlackboard(author.name || author.role, critic.name || critic.role, currentDraft);
+        const h0 = extractHtmlCode(currentDraft);
+        if (h0) bestHtmlFound = h0;
+
+        for (let r = 1; r <= rounds; r++) {
+          const gateReview = await maybePause(`نقد دور ${r}`);
+          if (gateReview.action === 'skip') {
+            setStepStatus(`review-${r}`, 'done');
+            setStepStatus(`revise-${r}`, 'done');
+            continue;
+          }
+
+          setActiveNodes(critic.id ? `tnode-${critic.id}` : 'tnode-manager');
+          setStepStatus(`review-${r}`, 'active');
+          const guidance1 = hitlNote ? `\n\nنکته کاربر:\n${hitlNote}` : '';
+          hitlNote = '';
+
+          const reviewStep = await executeAgentStep(
+            critic,
+            `${critic.icon || '🔍'} ${critic.name || critic.role}: نقد دور ${r}`,
+            [
+              { role: 'system', content: `نقش تو: ${critic.role}\nوظیفه: ${critic.instructions}` },
+              { role: 'user', content: `هدف کاربر:\n${goal}\n\nپیش‌نویس فعلی:\n${currentDraft}${guidance1}\n\nایرادات، نقاط ضعف و پیشنهادهای دقیق اصلاحی را فهرست کن.` },
+            ]
+          );
+          setStepStatus(`review-${r}`, 'done');
+          reportSections.push(`## نقد دور ${r} (${critic.name || critic.role})\n${reviewStep.res.text}`);
+          postBlackboard(critic.name || critic.role, author.name || author.role, reviewStep.res.text);
+
+          const gateRevise = await maybePause(`اصلاح دور ${r}`);
+          if (gateRevise.action === 'skip') {
+            setStepStatus(`revise-${r}`, 'done');
+            continue;
+          }
+
+          setActiveNodes(author.id ? `tnode-${author.id}` : 'tnode-manager');
+          setStepStatus(`revise-${r}`, 'active');
+          const guidance2 = hitlNote ? `\n\nنکته کاربر:\n${hitlNote}` : '';
+          hitlNote = '';
+
+          const reviseStep = await executeAgentStep(
+            author,
+            `${author.icon || '✨'} ${author.name || author.role}: نسخه اصلاح‌شده (دور ${r})`,
+            [
+              { role: 'system', content: `نقش تو: ${author.role}\nوظیفه: ${author.instructions}` },
+              { role: 'user', content: `هدف کاربر:\n${goal}\n\nپیش‌نویس قبلی:\n${currentDraft}\n\nنقد منتقد:\n${reviewStep.res.text}${guidance2}\n\nنسخه اصلاح‌شده و نهایی را کامل بنویس.` },
+            ],
+            { isFinal: r === rounds }
+          );
+          setStepStatus(`revise-${r}`, 'done');
+          currentDraft = reviseStep.res.text;
+          finalCard = reviseStep.card;
+          finalText = currentDraft;
+          reportSections.push(`## نسخه اصلاح‌شده دور ${r}\n${currentDraft}`);
+          postBlackboard(author.name || author.role, r === rounds ? 'خروجی نهایی' : (critic.name || critic.role), currentDraft);
+          const hr = extractHtmlCode(currentDraft);
+          if (hr) bestHtmlFound = hr;
+        }
+      } else {
+        // ─── Mode 1: Manager-Worker (Hierarchical) ───────────
+        setActiveNodes('tnode-manager');
+        setStepStatus('plan', 'active');
+        const workersDesc = team.workers.map((w, i) => `${i + 1}. ${w.name || w.role} (${w.role}): ${w.instructions}`).join('\n');
+        const planStep = await executeAgentStep(
+          team.manager,
+          `${team.manager.icon || '👑'} ${team.manager.name || 'مدیر تیم'}: برنامه‌ریزی`,
+          [
+            { role: 'system', content: team.manager.instructions },
+            { role: 'user', content: `هدف کاربر:\n${goal}\n\nاعضای تیم:\n${workersDesc}\n\nیک برنامه کوتاه و شفاف بنویس که هر عضو دقیقاً چه کاری انجام دهد.` },
+          ]
+        );
+        setStepStatus('plan', 'done');
+        reportSections.push(`## برنامه مدیر\n${planStep.res.text}`);
+        postBlackboard(team.manager.name || 'مدیر تیم', 'همه متخصص‌ها', planStep.res.text);
+
+        const workerOutputs = [];
+        for (const w of team.workers) {
+          if (teamAbort.signal.aborted) break;
+          const gate = await maybePause(w.name || w.role);
+          if (gate.action === 'skip') {
+            setStepStatus(w.id, 'done');
+            continue;
+          }
+
+          setActiveNodes(`tnode-${w.id}`);
+          setStepStatus(w.id, 'active');
+          const prevContext = workerOutputs.length
+            ? `\n\nخروجی اعضای قبلی تیم:\n${workerOutputs.map((o) => `### ${o.role}\n${o.text}`).join('\n\n')}`
+            : '';
+          const guidance = hitlNote ? `\n\nراهنمایی کاربر:\n${hitlNote}` : '';
+          hitlNote = '';
+
+          const wStep = await executeAgentStep(
+            w,
+            `${w.icon || '🤖'} ${w.name || w.role}`,
+            [
+              { role: 'system', content: `نقش تو: ${w.role}\nوظیفه: ${w.instructions}` },
+              { role: 'user', content: `هدف اصلی کاربر:\n${goal}\n\nبرنامه مدیر:\n${planStep.res.text}${prevContext}${guidance}\n\nحالا وظیفه خودت را با دقت بالا انجام بده.` },
+            ]
+          );
+          setStepStatus(w.id, 'done');
+          workerOutputs.push({ role: w.name || w.role, text: wStep.res.text });
+          reportSections.push(`## ${w.name || w.role}\n${wStep.res.text}`);
+          postBlackboard(w.name || w.role, team.manager.name || 'مدیر تیم', wStep.res.text);
+          const foundHtml = extractHtmlCode(wStep.res.text);
+          if (foundHtml) bestHtmlFound = foundHtml;
+        }
+
+        await maybePause('خروجی نهایی یکپارچه');
+        setActiveNodes('tnode-final');
+        setStepStatus('final', 'active');
+        const allWork = workerOutputs.map((o) => `### ${o.role}\n${o.text}`).join('\n\n');
+        const guidance = hitlNote ? `\n\nراهنمایی کاربر:\n${hitlNote}` : '';
+        hitlNote = '';
+
+        const synthStep = await executeAgentStep(
+          team.manager,
+          '✨ خروجی نهایی یکپارچه (مدیر تیم)',
+          [
+            { role: 'system', content: team.manager.instructions },
+            { role: 'user', content: `هدف کاربر:\n${goal}\n\nخروجی اعضای تیم:\n${allWork}${guidance}\n\nهمه موارد را یکپارچه کن و خروجی نهایی کامل و آماده استفاده را تحویل بده. اگر پروژه وب است، کل کد HTML/CSS/JS را در یک بلوک \`\`\`html واحد قرار بده.` },
+          ],
+          { isFinal: true }
+        );
+        setStepStatus('final', 'done');
+        finalCard = synthStep.card;
+        finalText = synthStep.res.text;
+        reportSections.push(`## خروجی نهایی\n${finalText}`);
+        postBlackboard(team.manager.name || 'مدیر تیم', 'خروجی نهایی', finalText);
       }
 
-      // Phase 3: Manager Final Synthesis
-      setActiveNode('tnode-final');
-      setStepStatus('final', 'active');
-      const finalCard = appendAgentCard('✨ خروجی نهایی یکپارچه (مدیر تیم)', 'در حال جمع‌بندی...', true);
-      const finalBody = finalCard.querySelector('.agent-card-body');
-      const allWork = workerOutputs.map((o) => `### ${o.role}\n${o.text}`).join('\n\n');
-
-      const finalRes = await callAgent(
-        team.manager.providerId,
-        [
-          { role: 'system', content: team.manager.instructions },
-          { role: 'user', content: `هدف کاربر:\n${goal}\n\nخروجی اعضای تیم:\n${allWork}\n\nهمه موارد را یکپارچه کن و خروجی نهایی کامل و آماده استفاده را تحویل بده. اگر پروژه وب است، کل کد HTML/CSS/JS را در یک بلوک \`\`\`html واحد قرار بده.` },
-        ],
-        ({ text, thinking }) => { finalBody.innerHTML = formatAgentOutput(text, thinking, true); finalBody.scrollTop = finalBody.scrollHeight; feedEl.scrollTop = feedEl.scrollHeight; },
-        teamAbort.signal
-      );
-      finalBody.innerHTML = formatAgentOutput(finalRes.text, finalRes.thinking, false);
-      finalCard.querySelector('.stat-pill').textContent = `✓ ${finalRes.provider} / ${finalRes.model}`;
-      setStepStatus('final', 'done');
-
-      const finalHtml = extractHtmlCode(finalRes.text) || bestHtmlFound;
-      const fullReportMd = `# هدف پروژه\n${goal}\n\n## برنامه مدیر\n${planRes.text}\n\n${workerOutputs.map((o) => `## ${o.role}\n${o.text}`).join('\n\n')}\n\n## خروجی نهایی\n${finalRes.text}`;
+      const finalHtml = extractHtmlCode(finalText) || bestHtmlFound;
+      const fullReportMd = reportSections.join('\n\n');
 
       store.state.lastTeamRun = { goal, fullReportMd, finalHtml: finalHtml || null, ts: Date.now() };
-      store.save();
+      store.addTeamRun({
+        teamId: team.id,
+        teamName: team.name,
+        mode: activeMode,
+        goal,
+        finalText,
+        finalHtml: finalHtml || null,
+        fullReportMd,
+        blackboard: [...blackboardEntries],
+      });
+      histCountEl.textContent = String((store.state.teamRuns || []).length);
+      if (activeSubPanel === 'history') renderSubPanel();
 
-      const acts = document.createElement('div');
-      acts.className = 'final-actions';
-      acts.innerHTML = `
-        ${finalHtml ? '<button type="button" class="btn btn-amber btn-sm" id="btn-live-preview">👁️ پیش‌نمایش زنده سایت</button>' : ''}
-        ${finalHtml ? '<button type="button" class="btn btn-ok btn-sm" id="btn-dl-html">⬇️ دانلود index.html</button>' : ''}
-        <button type="button" class="btn btn-ghost btn-sm" id="btn-dl-md">📄 دانلود کل گزارش (.md)</button>
-        <button type="button" class="btn btn-ghost btn-sm" id="btn-copy-final">📋 کپی خروجی</button>
-      `;
-      finalCard.appendChild(acts);
-      acts.querySelector('#btn-live-preview')?.addEventListener('click', () => window.__openHtmlPreview?.(finalHtml));
-      acts.querySelector('#btn-dl-html')?.addEventListener('click', () => {
-        const blob = new Blob([finalHtml], { type: 'text/html;charset=utf-8' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = 'index.html';
-        a.click();
-      });
-      acts.querySelector('#btn-dl-md')?.addEventListener('click', () => {
-        const blob = new Blob([fullReportMd], { type: 'text/markdown;charset=utf-8' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = `9router-team-output-${Date.now()}.md`;
-        a.click();
-      });
-      acts.querySelector('#btn-copy-final')?.addEventListener('click', () => {
-        navigator.clipboard.writeText(finalHtml || finalRes.text).then(() => onToast('کپی شد ✓'));
-      });
+      if (finalCard) {
+        attachArtifactActions(finalCard, { finalHtml, fullReportMd, finalText, onToast });
+      }
       feedEl.scrollTop = feedEl.scrollHeight;
     } catch (err) {
       if (err.name !== 'AbortError') {
@@ -827,7 +1350,7 @@ export function renderAgentTeam(container, { onToast }) {
         errCard.querySelector('.agent-card-body').innerHTML = `<span style="color:var(--danger)">${escHtml(err.message)}</span>`;
       }
     } finally {
-      setActiveNode(null);
+      setActiveNodes(null);
       teamAbort = null;
       runBtn.textContent = '🚀 اجرای تیم';
     }

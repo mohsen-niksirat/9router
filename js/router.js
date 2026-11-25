@@ -284,8 +284,10 @@ async function parseSSE(res, onStream, signal, onFirstToken) {
  * @param {function} [opts.onMeta] - Called with telemetry { providerName, modelId, ttftMs, totalMs, tokensOut, tokPerSec, done }
  * @param {AbortSignal} [opts.signal]
  * @param {{ type: 'provider'|'combo', id: string, model?: string, keyId?: string }} [opts.targetOverride]
+ * @param {number} [opts.temperature]
+ * @param {number} [opts.maxTokens]
  */
-export async function runChatCompletion({ messages, onStream, onMeta, signal, targetOverride = null }) {
+export async function runChatCompletion({ messages, onStream, onMeta, signal, targetOverride = null, temperature, maxTokens }) {
   const t0 = performance.now();
   const target = targetOverride || store.state.activeTarget;
   let entries = [];
@@ -340,8 +342,14 @@ export async function runChatCompletion({ messages, onStream, onMeta, signal, ta
           body: JSON.stringify({
             model,
             messages,
-            temperature: Number(store.state.settings.temperature ?? 0.7),
-            max_tokens: Number(store.state.settings.maxTokens ?? 4096),
+            temperature:
+              typeof temperature === 'number' && !Number.isNaN(temperature)
+                ? temperature
+                : Number(store.state.settings.temperature ?? 0.7),
+            max_tokens:
+              typeof maxTokens === 'number' && !Number.isNaN(maxTokens)
+                ? maxTokens
+                : Number(store.state.settings.maxTokens ?? 4096),
             stream: true,
           }),
           signal,
