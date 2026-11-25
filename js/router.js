@@ -274,7 +274,7 @@ async function parseSSE(res, onStream, signal, onFirstToken) {
  * @param {function} [opts.onStream]
  * @param {function} [opts.onMeta] - Called with telemetry { providerName, modelId, ttftMs, totalMs, tokensOut, tokPerSec, done }
  * @param {AbortSignal} [opts.signal]
- * @param {{ type: 'provider'|'combo', id: string, model?: string }} [opts.targetOverride]
+ * @param {{ type: 'provider'|'combo', id: string, model?: string, keyId?: string }} [opts.targetOverride]
  */
 export async function runChatCompletion({ messages, onStream, onMeta, signal, targetOverride = null }) {
   const t0 = performance.now();
@@ -301,12 +301,21 @@ export async function runChatCompletion({ messages, onStream, onMeta, signal, ta
   let lastError = null;
   for (const prov of providers) {
     const triedKeys = new Set();
-    for (let attempt = 0; attempt < Math.max(1, prov.keys.length); attempt++) {
-      const key = pickKey(prov, policy, triedKeys);
+    const pinnedKey =
+      target?.type === 'provider' && target?.keyId
+        ? (prov.keys || []).find((k) => k.id === target.keyId) || null
+        : null;
+    const maxAttempts = pinnedKey ? 1 : Math.max(1, prov.keys.length);
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const key = pinnedKey || pickKey(prov, policy, triedKeys);
       if (!key) break;
       triedKeys.add(key.id);
 
-      const model = target?.model || prov.defaultModel || prov.models[0] || 'gpt-4o-mini';
+      const model = target?.model || prov.defaultModel || prov.models[0] || '';
+      if (!model) {
+        lastError = new Error(`هیچ مدلی برای ارائه‌دهنده ${prov.name} تعریف نشده است.`);
+        break;
+      }
       const url = applyCorsProxy(`${prov.baseUrl.replace(/\/+$/, '')}/chat/completions`);
       const attemptStart = performance.now();
       let ttftMs = null;

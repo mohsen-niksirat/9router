@@ -66,11 +66,21 @@ function applyTheme() {
   document.documentElement.classList.toggle('light-mode', store.state.settings.theme === 'light');
 }
 
+function compactMaskKey(val) {
+  const s = String(val || '');
+  if (s.length < 10) return '••••';
+  return `${s.slice(0, 6)}...${s.slice(-4)}`;
+}
+
 function getActiveTargetLabel() {
   const t = store.state.activeTarget;
   if (t?.type === 'provider') {
     const p = store.state.providers.find((x) => x.id === t.id);
-    return p ? `${p.name} (${p.defaultModel})` : 'انتخاب نشده';
+    if (!p) return 'انتخاب نشده';
+    const model = t.model || p.defaultModel || p.models?.[0] || '';
+    const pinnedKey = t.keyId ? (p.keys || []).find((k) => k.id === t.keyId) : null;
+    const keyTag = pinnedKey ? ' 🔑' : '';
+    return model ? `${p.name} (${model})${keyTag}` : `${p.name}${keyTag}`;
   }
   const c = store.state.combos.find((x) => x.id === t?.id) || store.state.combos[0];
   return c ? `کمبو: ${c.name}` : 'انتخاب نشده';
@@ -106,12 +116,65 @@ function closeAllPopovers() {
   document.querySelectorAll('[aria-expanded="true"]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
 }
 
-function renderModelPopover() {
+function renderModelPopover(query = '') {
   const panel = document.getElementById('popover-model');
   if (!panel) return;
+
+  let searchEl = panel.querySelector('#popover-model-search');
+  let bodyEl = panel.querySelector('.popover-model-body');
+  if (!searchEl || !bodyEl) {
+    panel.innerHTML = `
+      <div class="popover-search-wrap">
+        <input type="search" id="popover-model-search" class="popover-search" placeholder="جستجوی مدل یا ارائه‌دهنده..." autocomplete="off">
+      </div>
+      <div class="popover-model-body"></div>
+    `;
+    searchEl = panel.querySelector('#popover-model-search');
+    bodyEl = panel.querySelector('.popover-model-body');
+    searchEl.addEventListener('input', () => {
+      renderModelPopover(searchEl.value);
+    });
+    searchEl.addEventListener('click', (e) => e.stopPropagation());
+  }
+  if (query !== undefined && searchEl.value !== query) {
+    searchEl.value = query;
+  }
+
+  const q = (searchEl.value || '').trim().toLowerCase();
   const t = store.state.activeTarget;
 
-  const comboItems = store.state.combos
+  // Active provider key selector row
+  let keysBarHtml = '';
+  if (t?.type === 'provider') {
+    const activeProv = store.state.providers.find((x) => x.id === t.id);
+    if (activeProv && activeProv.keys?.length) {
+      const selectedKeyId = activeProv.keys.some((k) => k.id === t.keyId) ? t.keyId : '';
+      const keyPills = [
+        `<button class="popover-key-pill ${!selectedKeyId ? 'active' : ''}" type="button" data-pick-key="">خودکار</button>`,
+        ...activeProv.keys.map((k) => {
+          const isKeyAct = selectedKeyId === k.id;
+          const dotCls = k.status === 'dead' ? 'dead' : k.status === 'cooldown' ? 'cooldown' : '';
+          return `<button class="popover-key-pill ${isKeyAct ? 'active' : ''}" type="button" data-pick-key="${escHtml(k.id)}" title="${escHtml(k.label || '')}">
+            <span class="dot-status ${dotCls}" aria-hidden="true"></span>
+            <span class="ltr-code">${escHtml(compactMaskKey(k.value))}</span>
+          </button>`;
+        }),
+      ].join('');
+      keysBarHtml = `
+        <div class="popover-keys-bar">
+          <div class="popover-keys-label">کلید فعال (${escHtml(activeProv.name)})</div>
+          <div class="popover-keys-pills">${keyPills}</div>
+        </div>
+      `;
+    }
+  }
+
+  const filteredCombos = store.state.combos.filter((c) => {
+    if (!q) return true;
+    return c.name.toLowerCase().includes(q) || (c.policy || '').toLowerCase().includes(q);
+  });
+
+  const comboItems = filteredCombos
     .map((c) => {
       const isAct = t?.type === 'combo' && t.id === c.id;
       return `<button class="popover-opt ${isAct ? 'active' : ''}" type="button" data-pick-type="combo" data-pick-id="${escHtml(c.id)}">
@@ -121,31 +184,86 @@ function renderModelPopover() {
     })
     .join('');
 
-  const provItems = store.state.providers
+  const provGroups = store.state.providers
     .map((p) => {
-      const isAct = t?.type === 'provider' && t.id === p.id;
-      const keyCount = p.keys.filter((k) => k.status !== 'dead').length;
-      return `<button class="popover-opt ${isAct ? 'active' : ''}" type="button" data-pick-type="provider" data-pick-id="${escHtml(p.id)}">
-        <span>${escHtml(p.name)}</span>
-        <small>${escHtml(p.defaultModel || '')}${keyCount ? '' : ' (بدون کلید)'}</small>
-      </button>`;
+      const allModels = (p.models && p.models.length) ? p.models : (p.defaultModel ? [p.defaultModel] : []);
+      const nameMatches = !q || p.name.toLowerCase().includes(q);
+      const matchedModels = nameMatches
+        ? allModels
+        : allModels.filter((m) => m.toLowerCase().includes(q));
+      if (q && !nameMatches && !matchedModels.length) return '';
+
+      const activeKeyCount = (p.keys || []).filter((k) => k.status !== 'dead').length;
+      const keyBadge = activeKeyCount ? `${activeKeyCount} کلید` : 'بدون کلید';
+      const activeModelForProv = t?.type === 'provider' && t.id === p.id
+        ? (t.model || p.defaultModel || allModels[0] || '')
+        : '';
+
+      const modelRows = matchedModels.length
+        ? matchedModels
+            .map((m) => {
+              const isAct = t?.type === 'provider' && t.id === p.id && activeModelForProv === m;
+              return `<button class="popover-opt popover-model-opt ${isAct ? 'active' : ''}" type="button" data-pick-type="provider" data-pick-id="${escHtml(p.id)}" data-pick-model="${escHtml(m)}">
+                <span class="ltr-code" title="${escHtml(m)}">${escHtml(m)}</span>
+                ${m === p.defaultModel ? '<small>پیش‌فرض</small>' : ''}
+              </button>`;
+            })
+            .join('')
+        : `<button class="popover-opt ${t?.type === 'provider' && t.id === p.id ? 'active' : ''}" type="button" data-pick-type="provider" data-pick-id="${escHtml(p.id)}" data-pick-model="">
+            <span class="muted">مدلی تعریف نشده</span>
+          </button>`;
+
+      return `
+        <div class="popover-prov-group">
+          <div class="popover-prov-head">
+            <span class="popover-prov-name"><span class="node-dot" style="background:${escHtml(p.color || '#f5b942')}"></span>${escHtml(p.name)}</span>
+            <small class="${activeKeyCount ? 'ok' : ''}">${keyBadge}</small>
+          </div>
+          ${modelRows}
+        </div>
+      `;
     })
+    .filter(Boolean)
     .join('');
 
-  panel.innerHTML = `
+  bodyEl.innerHTML = `
+    ${keysBarHtml}
+    ${(!q || comboItems) ? `
+      <div class="popover-group">
+        <div class="popover-head">کمبوهای مسیریابی</div>
+        ${comboItems || '<div class="muted" style="padding:4px 8px">کمبویی وجود ندارد</div>'}
+      </div>
+    ` : ''}
     <div class="popover-group">
-      <div class="popover-head">کمبوهای مسیریابی</div>
-      ${comboItems || '<div class="muted" style="padding:4px 8px">کمبویی وجود ندارد</div>'}
-    </div>
-    <div class="popover-group">
-      <div class="popover-head">ارائه‌دهنده‌ها</div>
-      ${provItems}
+      <div class="popover-head">ارائه‌دهنده‌ها و مدل‌ها</div>
+      ${provGroups || '<div class="muted" style="padding:6px 8px">موردی یافت نشد</div>'}
     </div>
   `;
 
-  panel.querySelectorAll('[data-pick-type]').forEach((btn) => {
+  bodyEl.querySelectorAll('[data-pick-key]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const cur = store.state.activeTarget;
+      if (cur?.type !== 'provider') return;
+      store.state.activeTarget = { ...cur, keyId: btn.dataset.pickKey || '' };
+      store.save();
+      updateTargetPill();
+      renderModelPopover(searchEl.value);
+      toast(btn.dataset.pickKey ? 'کلید اختصاصی انتخاب شد' : 'انتخاب کلید روی حالت خودکار قرار گرفت');
+    });
+  });
+
+  bodyEl.querySelectorAll('[data-pick-type]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      store.state.activeTarget = { type: btn.dataset.pickType, id: btn.dataset.pickId };
+      const type = btn.dataset.pickType;
+      const id = btn.dataset.pickId;
+      if (type === 'provider') {
+        const model = btn.dataset.pickModel || '';
+        const prevKeyId = t?.type === 'provider' && t.id === id ? (t.keyId || '') : '';
+        store.state.activeTarget = { type: 'provider', id, model, keyId: prevKeyId };
+      } else {
+        store.state.activeTarget = { type: 'combo', id };
+      }
       store.save();
       updateTargetPill();
       closeAllPopovers();
@@ -1369,7 +1487,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const supportsImages = document.getElementById('m-prov-img').checked;
     if (!name || !baseUrl.startsWith('http')) return toast('نام و Base URL معتبر وارد کنید');
     if (id) {
-      const updated = store.updateProvider(id, { name, baseUrl, defaultModel, models, supportsImages });
+      const existing = store.state.providers.find((x) => x.id === id);
+      const effectiveDefault =
+        defaultModel && existing && defaultModel === existing.defaultModel && !models.includes(defaultModel)
+          ? (models[0] || '')
+          : defaultModel;
+      const updated = store.updateProvider(id, { name, baseUrl, defaultModel: effectiveDefault, models, supportsImages });
       if (apiKey && updated && !(updated.keys || []).some((k) => k.value === apiKey)) {
         store.addKey(updated.id, { value: apiKey });
       }

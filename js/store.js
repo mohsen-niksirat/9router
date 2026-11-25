@@ -100,7 +100,7 @@ const DEFAULT_STATE = {
       ],
     },
   ],
-  activeTarget: { type: 'combo', id: 'combo_default' }, // { type: 'combo'|'provider', id }
+  activeTarget: { type: 'combo', id: 'combo_default' }, // { type: 'combo'|'provider', id, model?, keyId? }
   sessions: [],
   activeSessionId: null,
   prompts: [
@@ -201,13 +201,12 @@ class Store {
     if (cleanDefault && !cleanModels.includes(cleanDefault)) {
       cleanModels = [cleanDefault, ...cleanModels];
     }
-    if (!cleanModels.length) cleanModels = ['gpt-4o-mini'];
     const p = {
       id: this.uid('prov'),
       slug: name.toLowerCase().replace(/[^a-z0-9]+/g, '_') || this.uid('c'),
       name: name.trim(),
       baseUrl: baseUrl.trim().replace(/\/+$/, ''),
-      defaultModel: cleanDefault || cleanModels[0],
+      defaultModel: cleanDefault || cleanModels[0] || '',
       models: cleanModels,
       color,
       pinned: false,
@@ -223,23 +222,36 @@ class Store {
   updateProvider(id, patch = {}) {
     const p = this.state.providers.find((x) => x.id === id);
     if (!p) return null;
+    const prevDefault = p.defaultModel || '';
+    const hasModelsPatch = Array.isArray(patch.models);
     const next = { ...patch };
     if (typeof next.name === 'string') next.name = next.name.trim();
     if (typeof next.baseUrl === 'string') next.baseUrl = next.baseUrl.trim().replace(/\/+$/, '');
-    if (Array.isArray(next.models)) {
+    if (hasModelsPatch) {
       next.models = [...new Set(next.models.map((m) => String(m || '').trim()).filter(Boolean))];
     }
     if (typeof next.defaultModel === 'string') {
       next.defaultModel = next.defaultModel.trim();
     }
     Object.assign(p, next);
-    if (p.defaultModel) {
-      if (!Array.isArray(p.models)) p.models = [];
+    if (!Array.isArray(p.models)) p.models = [];
+    if (hasModelsPatch) {
+      const userChangedDefault = typeof next.defaultModel === 'string' && next.defaultModel !== '' && next.defaultModel !== prevDefault;
+      if (p.defaultModel && !p.models.includes(p.defaultModel)) {
+        if (userChangedDefault) {
+          p.models = [p.defaultModel, ...p.models];
+        } else {
+          p.defaultModel = p.models[0] || '';
+        }
+      } else if (!p.defaultModel) {
+        p.defaultModel = p.models[0] || '';
+      }
+    } else if (p.defaultModel) {
       if (!p.models.includes(p.defaultModel)) {
         p.models = [p.defaultModel, ...p.models];
       }
-    } else if (Array.isArray(p.models) && p.models.length) {
-      p.defaultModel = p.models[0];
+    } else {
+      p.defaultModel = p.models[0] || '';
     }
     this.save();
     return p;
@@ -276,6 +288,13 @@ class Store {
     const p = this.state.providers.find((x) => x.id === providerId);
     if (!p) return;
     p.keys = p.keys.filter((k) => k.id !== keyId);
+    if (
+      this.state.activeTarget?.type === 'provider' &&
+      this.state.activeTarget.id === providerId &&
+      this.state.activeTarget.keyId === keyId
+    ) {
+      this.state.activeTarget.keyId = '';
+    }
     this.save();
   }
 
