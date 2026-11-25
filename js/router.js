@@ -72,6 +72,7 @@ export async function fetchProviderModels({ baseUrl, apiKey = '', corsProxy } = 
 
 /**
  * Resolve ordered list of provider entries from a Combo's visual node graph.
+ * Honors per-node model selection (`node.model`) and preserves node order.
  */
 export function resolveComboChain(combo) {
   const policyNode = combo.nodes.find((n) => n.type === 'policy');
@@ -80,7 +81,8 @@ export function resolveComboChain(combo) {
   // Walk edges starting from policyNode (or startNode) in graph order
   const startId = policyNode?.id || combo.nodes.find((n) => n.type === 'start')?.id;
   const visited = new Set();
-  const orderedProviderIds = [];
+  const orderedNodes = [];
+  const seenNodeIds = new Set();
 
   const queue = [startId];
   while (queue.length) {
@@ -91,46 +93,53 @@ export function resolveComboChain(combo) {
     for (const edge of outgoing) {
       const target = combo.nodes.find((n) => n.id === edge.to);
       if (!target) continue;
-      if (target.type === 'provider' && target.providerId) {
-        if (!orderedProviderIds.includes(target.providerId)) {
-          orderedProviderIds.push(target.providerId);
-        }
+      if (target.type === 'provider' && target.providerId && !seenNodeIds.has(target.id)) {
+        seenNodeIds.add(target.id);
+        orderedNodes.push(target);
       }
       queue.push(target.id);
     }
   }
 
   // Fallback: if user placed provider nodes without edges, include them
-  if (!orderedProviderIds.length) {
+  if (!orderedNodes.length) {
     for (const n of combo.nodes) {
-      if (n.type === 'provider' && n.providerId) orderedProviderIds.push(n.providerId);
+      if (n.type === 'provider' && n.providerId && !seenNodeIds.has(n.id)) {
+        seenNodeIds.add(n.id);
+        orderedNodes.push(n);
+      }
     }
   }
 
-  let providers = orderedProviderIds
-    .map((pid) => store.state.providers.find((p) => p.id === pid))
+  let entries = orderedNodes
+    .map((n) => {
+      const provider = store.state.providers.find((p) => p.id === n.providerId);
+      if (!provider) return null;
+      return { provider, model: n.model || '' };
+    })
     .filter(Boolean);
 
   // Apply routing policy ordering
-  if (policy === 'round_robin' && providers.length > 1) {
-    const shift = store.state.rrCursor % providers.length;
+  if (policy === 'round_robin' && entries.length > 1) {
+    const shift = store.state.rrCursor % entries.length;
     store.state.rrCursor = (store.state.rrCursor + 1) % 100000;
-    providers = [...providers.slice(shift), ...providers.slice(0, shift)];
+    entries = [...entries.slice(shift), ...entries.slice(0, shift)];
   } else if (policy === 'smart_router') {
-    providers.sort((a, b) => {
-      const failA = a.keys.reduce((s, k) => s + (k.failures || 0), 0);
-      const failB = b.keys.reduce((s, k) => s + (k.failures || 0), 0);
+    entries.sort((a, b) => {
+      const failA = a.provider.keys.reduce((s, k) => s + (k.failures || 0), 0);
+      const failB = b.provider.keys.reduce((s, k) => s + (k.failures || 0), 0);
       return failA - failB;
     });
   } else if (policy === 'least_used') {
-    providers.sort((a, b) => {
-      const tokA = a.keys.reduce((s, k) => s + (k.tokens || 0), 0);
-      const tokB = b.keys.reduce((s, k) => s + (k.tokens || 0), 0);
+    entries.sort((a, b) => {
+      const tokA = a.provider.keys.reduce((s, k) => s + (k.tokens || 0), 0);
+      const tokB = b.provider.keys.reduce((s, k) => s + (k.tokens || 0), 0);
       return tokA - tokB;
     });
   }
 
-  return { policy, providers };
+  const providers = entries.map((e) => e.provider);
+  return { policy, providers, entries };
 }
 
 function pickKey(provider, policy, triedKeyIds) {
@@ -279,27 +288,28 @@ async function parseSSE(res, onStream, signal, onFirstToken) {
 export async function runChatCompletion({ messages, onStream, onMeta, signal, targetOverride = null }) {
   const t0 = performance.now();
   const target = targetOverride || store.state.activeTarget;
-  let providers = [];
+  let entries = [];
   let policy = 'fallback';
 
   if (target?.type === 'provider') {
     const p = store.state.providers.find((x) => x.id === target.id);
-    if (p) providers = [p];
+    if (p) entries = [{ provider: p, model: target?.model || '' }];
   } else {
     const combo = store.state.combos.find((c) => c.id === target?.id) || store.state.combos[0];
     if (combo) {
       const resolved = resolveComboChain(combo);
-      providers = resolved.providers;
+      entries = resolved.entries || resolved.providers.map((p) => ({ provider: p, model: '' }));
       policy = resolved.policy;
     }
   }
 
-  if (!providers.length) {
+  if (!entries.length) {
     throw new Error('هیچ ارائه‌دهنده یا کمبویی انتخاب نشده است. از بخش Providers & Keys کلید اضافه کنید.');
   }
 
   let lastError = null;
-  for (const prov of providers) {
+  for (const entry of entries) {
+    const prov = entry.provider;
     const triedKeys = new Set();
     const pinnedKey =
       target?.type === 'provider' && target?.keyId
@@ -311,7 +321,7 @@ export async function runChatCompletion({ messages, onStream, onMeta, signal, ta
       if (!key) break;
       triedKeys.add(key.id);
 
-      const model = target?.model || prov.defaultModel || prov.models[0] || '';
+      const model = entry.model || target?.model || prov.defaultModel || prov.models[0] || '';
       if (!model) {
         lastError = new Error(`هیچ مدلی برای ارائه‌دهنده ${prov.name} تعریف نشده است.`);
         break;

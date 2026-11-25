@@ -507,47 +507,127 @@ textarea:focus-visible, input:focus-visible { outline: 2px solid var(--focus-rin
 }
 .graph-left, .graph-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .graph-select { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+.graph-zoom-group { display: inline-flex; align-items: center; gap: 3px; }
+.graph-zoom-val { min-width: 52px; justify-content: center; font-variant-numeric: tabular-nums; direction: ltr; }
 .graph-hint { padding: 8px 16px; font-size: 12.5px; color: var(--text-3); border-bottom: 1px solid var(--border); }
+.graph-hint kbd {
+  display: inline-block; padding: 1px 5px; border-radius: 5px; font-size: 11px;
+  background: var(--surface-2); border: 1px solid var(--border-strong); color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 .graph-canvas {
-  flex: 1; position: relative; overflow: auto; min-height: 460px;
+  flex: 1; position: relative; overflow: hidden; min-height: 460px; cursor: grab; outline: none;
   background-image: radial-gradient(var(--border-strong) 1px, transparent 1px);
   background-size: 22px 22px;
 }
-.graph-svg { position: absolute; inset: 0; width: 100%; height: 100%; min-width: 960px; min-height: 540px; pointer-events: none; }
-.wire { fill: none; stroke: var(--amber); stroke-width: 2.5; opacity: 0.85; }
-.wire-hit { fill: none; stroke: transparent; stroke-width: 14; pointer-events: stroke; cursor: pointer; }
-.wire-hit:hover + .wire { stroke: var(--danger); stroke-width: 3.5; }
-.graph-nodes { position: relative; min-width: 960px; min-height: 540px; }
+.graph-canvas.panning { cursor: grabbing; }
+.graph-stage {
+  position: absolute; inset: 0; transform-origin: 0 0; will-change: transform;
+}
+.graph-svg {
+  position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none;
+}
+.wire { fill: none; stroke: var(--amber); stroke-width: 2.5; opacity: 0.78; transition: stroke 0.15s, stroke-width 0.15s, opacity 0.15s; }
+.wire-flow {
+  fill: none; stroke: var(--amber); stroke-width: 2.5; opacity: 0.95;
+  stroke-dasharray: 6 10; pointer-events: none;
+  animation: wireFlow 1.2s linear infinite;
+}
+@keyframes wireFlow {
+  from { stroke-dashoffset: 32; }
+  to { stroke-dashoffset: 0; }
+}
+.wire-hit { fill: none; stroke: transparent; stroke-width: 18; pointer-events: stroke; cursor: pointer; }
+.wire-group:hover .wire,
+.wire-group.selected .wire { stroke: var(--danger); stroke-width: 3.2; opacity: 1; }
+.wire-group:hover .wire-flow,
+.wire-group.selected .wire-flow { stroke: var(--danger); }
+.wire-preview {
+  fill: none; stroke: var(--amber); stroke-width: 2.5; stroke-dasharray: 7 6; opacity: 0.9; pointer-events: none;
+}
+.graph-edge-controls { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
+.edge-del-btn {
+  position: absolute; transform: translate(-50%, -50%); pointer-events: auto;
+  width: 22px; height: 22px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 14px; font-weight: 700; line-height: 1;
+  background: var(--surface); color: var(--text-2); border: 1px solid var(--border-strong);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25); opacity: 0.78;
+  transition: opacity 0.15s, background 0.15s, color 0.15s, border-color 0.15s, transform 0.15s;
+}
+.edge-del-btn:hover,
+.edge-del-btn.selected,
+.edge-del-btn:focus-visible {
+  opacity: 1; background: var(--danger); color: #ffffff; border-color: var(--danger);
+  transform: translate(-50%, -50%) scale(1.12);
+}
+.edge-priority-badge {
+  position: absolute; transform: translate(-50%, -50%); pointer-events: none;
+  padding: 1px 6px; border-radius: 99px; font-size: 10.5px; font-weight: 700;
+  background: var(--surface-2); color: var(--amber); border: 1px solid var(--border-strong);
+  font-variant-numeric: tabular-nums; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+.light-mode .edge-priority-badge { color: #b45309; }
+.graph-nodes { position: relative; min-width: 960px; min-height: 540px; z-index: 5; }
 
 .g-node {
-  position: absolute; width: 205px; border-radius: 13px;
+  position: absolute; width: 224px; border-radius: 13px;
   background: var(--surface); border: 1px solid var(--border-strong);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28); user-select: none; cursor: grab;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24); user-select: none; cursor: grab;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
+.light-mode .g-node { box-shadow: 0 6px 18px rgba(15, 23, 42, 0.1); }
 .g-node:active { cursor: grabbing; }
+.g-node.selected {
+  border-color: var(--amber);
+  box-shadow: 0 0 0 2px rgba(245, 185, 66, 0.35), 0 10px 26px rgba(0, 0, 0, 0.3);
+}
 .g-node-head {
   padding: 9px 12px; font-size: 13px; font-weight: 700;
   border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 7px;
 }
-.g-node-body { padding: 10px 12px; font-size: 12px; color: var(--text-2); }
-.node-start { border-color: rgba(16, 185, 129, 0.5); }
+.g-node-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.g-node-body { padding: 10px 12px; font-size: 12px; color: var(--text-2); display: flex; flex-direction: column; gap: 8px; }
+.node-start { border-color: rgba(16, 185, 129, 0.55); }
 .node-policy { border-color: rgba(245, 185, 66, 0.6); }
 .node-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
-.node-del { color: var(--text-3); font-size: 15px; padding: 0 4px; }
-.node-del:hover { color: var(--danger); }
-.node-policy-select { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 7px; padding: 5px 8px; font-size: 12.5px; }
-.node-model { font-family: monospace; font-size: 11.5px; color: var(--text); margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.node-keys.ok { color: var(--green); }
-.node-keys.warn { color: var(--amber); }
+.node-del {
+  width: 24px; height: 24px; border-radius: 7px; flex-shrink: 0;
+  display: grid; place-items: center; color: var(--text-3); font-size: 16px; line-height: 1;
+  transition: background 0.15s, color 0.15s;
+}
+.node-del:hover { color: var(--danger); background: rgba(239, 68, 68, 0.14); }
+.node-policy-select,
+.node-model-select {
+  width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
+  padding: 5px 8px; font-size: 12px; color: var(--text);
+}
+.node-model-select {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+.node-keys-badge {
+  display: inline-flex; align-items: center; gap: 6px; align-self: flex-start;
+  padding: 2px 8px; border-radius: 99px; font-size: 11px; font-weight: 600;
+  background: var(--bg); border: 1px solid var(--border);
+}
+.node-keys-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.node-keys-badge.ok { color: var(--green); border-color: rgba(16, 185, 129, 0.35); }
+.node-keys-badge.warn { color: var(--amber); border-color: rgba(245, 185, 66, 0.4); }
+.light-mode .node-keys-badge.warn { color: #b45309; }
 
 .port {
   position: absolute; top: 50%; transform: translateY(-50%);
-  width: 14px; height: 14px; border-radius: 50%;
+  width: 16px; height: 16px; border-radius: 50%;
   border: 2px solid var(--amber); background: var(--bg); cursor: crosshair;
+  transition: transform 0.15s, box-shadow 0.15s, background 0.15s;
 }
-.port-in { left: -7px; }
-.port-out { right: -7px; background: var(--amber); }
-.port-out.linking { box-shadow: 0 0 0 5px rgba(245, 185, 66, 0.35); }
+.port:hover { transform: translateY(-50%) scale(1.2); }
+.port-in { left: -8px; }
+.port-out { right: -8px; background: var(--amber); }
+.port-out.linking { box-shadow: 0 0 0 6px rgba(245, 185, 66, 0.35); transform: translateY(-50%) scale(1.18); }
+.port-in.port-compatible {
+  border-color: var(--green); background: rgba(16, 185, 129, 0.25);
+  box-shadow: 0 0 0 5px rgba(16, 185, 129, 0.28); transform: translateY(-50%) scale(1.2);
+}
 
 /* ─── Buttons, Modals, Toast ───────────────────────────────── */
 .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 9px; font-size: 13px; font-weight: 600; }
