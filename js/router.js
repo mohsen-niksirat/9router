@@ -157,7 +157,7 @@ function pickKey(provider, policy, triedKeyIds) {
   return candidates[0];
 }
 
-function extractTextParts(val) {
+export function extractTextParts(val) {
   if (val == null) return { text: '', thinking: '' };
   if (typeof val === 'string') return { text: val, thinking: '' };
   if (typeof val !== 'object') return { text: '', thinking: '' };
