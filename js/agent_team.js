@@ -113,6 +113,14 @@ function formatAgentOutput(text, thinking, isLive = false) {
   return `${thinkHtml}${bodyHtml}${isLive ? ' ▌' : ''}`;
 }
 
+function getDebateParticipants(team) {
+  const workers = Array.isArray(team.workers) ? team.workers : [];
+  const author = workers[0] || team.manager;
+  const hasDedicatedCritics = workers.length > 1;
+  const critics = hasDedicatedCritics ? workers.slice(1) : [team.manager];
+  return { author, critics, usingManagerCriticFallback: !hasDedicatedCritics };
+}
+
 function buildStepsList(team, mode) {
   if (mode === 'sequential') {
     return team.workers.map((w, i) => ({ id: w.id, label: `${i + 1}. ${w.name || w.role}` }));
@@ -125,9 +133,14 @@ function buildStepsList(team, mode) {
   }
   if (mode === 'debate_review') {
     const rounds = Math.max(1, Number(team.maxRounds) || 1);
+    const { critics, usingManagerCriticFallback } = getDebateParticipants(team);
     const steps = [{ id: 'draft', label: '۱. پیش‌نویس اولیه' }];
     for (let r = 1; r <= rounds; r++) {
-      steps.push({ id: `review-${r}`, label: `نقد دور ${r}` });
+      critics.forEach((critic, ci) => {
+        const criticName = critic.name || critic.role;
+        const suffix = usingManagerCriticFallback ? ' (جایگزین مدیر)' : '';
+        steps.push({ id: `review-${r}-${ci}`, label: `نقد دور ${r}: ${criticName}${suffix}` });
+      });
       steps.push({ id: `revise-${r}`, label: `اصلاح دور ${r}` });
     }
     return steps;
@@ -1173,9 +1186,9 @@ export function renderAgentTeam(container, { onToast }) {
         postBlackboard(team.manager.name || 'مدیر تیم', 'خروجی نهایی', res.text);
       } else if (activeMode === 'debate_review') {
         // ─── Mode 4: Debate / Critic Review Loop ─────────────
-        const author = team.workers[0] || team.manager;
-        const critic = team.workers[1] || team.manager;
+        const { author, critics, usingManagerCriticFallback } = getDebateParticipants(team);
         const rounds = Math.max(1, Number(team.maxRounds) || 1);
+        const criticsNames = critics.map((c) => c.name || c.role).join('، ');
 
         setActiveNodes(author.id ? `tnode-${author.id}` : 'tnode-manager');
         setStepStatus('draft', 'active');
@@ -1192,34 +1205,49 @@ export function renderAgentTeam(container, { onToast }) {
         finalCard = draftStep.card;
         finalText = currentDraft;
         reportSections.push(`## پیش‌نویس اولیه (${author.name || author.role})\n${currentDraft}`);
-        postBlackboard(author.name || author.role, critic.name || critic.role, currentDraft);
+        postBlackboard(author.name || author.role, criticsNames, currentDraft);
         const h0 = extractHtmlCode(currentDraft);
         if (h0) bestHtmlFound = h0;
 
         for (let r = 1; r <= rounds; r++) {
-          const gateReview = await maybePause(`نقد دور ${r}`);
-          if (gateReview.action === 'skip') {
-            setStepStatus(`review-${r}`, 'done');
+          const roundCritiques = [];
+
+          for (let ci = 0; ci < critics.length; ci++) {
+            const critic = critics[ci];
+            const criticName = critic.name || critic.role;
+            const stepId = `review-${r}-${ci}`;
+            const fallbackTag = usingManagerCriticFallback ? ' (جایگزین مدیر)' : '';
+            const stepLabel = `نقد دور ${r}: ${criticName}${fallbackTag}`;
+
+            const gateReview = await maybePause(stepLabel);
+            if (gateReview.action === 'skip') {
+              setStepStatus(stepId, 'done');
+              continue;
+            }
+
+            setActiveNodes(critic.id ? `tnode-${critic.id}` : 'tnode-manager');
+            setStepStatus(stepId, 'active');
+            const guidance1 = hitlNote ? `\n\nنکته کاربر:\n${hitlNote}` : '';
+            hitlNote = '';
+
+            const reviewStep = await executeAgentStep(
+              critic,
+              `${critic.icon || '🔍'} ${criticName}${usingManagerCriticFallback ? ' (منتقد جایگزین — مدیر)' : ''}: نقد دور ${r}`,
+              [
+                { role: 'system', content: `نقش تو: ${critic.role}\nوظیفه: ${critic.instructions}` },
+                { role: 'user', content: `هدف کاربر:\n${goal}\n\nپیش‌نویس فعلی:\n${currentDraft}${guidance1}\n\nایرادات، نقاط ضعف و پیشنهادهای دقیق اصلاحی را فهرست کن.` },
+              ]
+            );
+            setStepStatus(stepId, 'done');
+            roundCritiques.push({ name: criticName, text: reviewStep.res.text });
+            reportSections.push(`## نقد دور ${r} (${criticName}${fallbackTag})\n${reviewStep.res.text}`);
+            postBlackboard(`${criticName}${fallbackTag}`, author.name || author.role, reviewStep.res.text);
+          }
+
+          if (!roundCritiques.length) {
             setStepStatus(`revise-${r}`, 'done');
             continue;
           }
-
-          setActiveNodes(critic.id ? `tnode-${critic.id}` : 'tnode-manager');
-          setStepStatus(`review-${r}`, 'active');
-          const guidance1 = hitlNote ? `\n\nنکته کاربر:\n${hitlNote}` : '';
-          hitlNote = '';
-
-          const reviewStep = await executeAgentStep(
-            critic,
-            `${critic.icon || '🔍'} ${critic.name || critic.role}: نقد دور ${r}`,
-            [
-              { role: 'system', content: `نقش تو: ${critic.role}\nوظیفه: ${critic.instructions}` },
-              { role: 'user', content: `هدف کاربر:\n${goal}\n\nپیش‌نویس فعلی:\n${currentDraft}${guidance1}\n\nایرادات، نقاط ضعف و پیشنهادهای دقیق اصلاحی را فهرست کن.` },
-            ]
-          );
-          setStepStatus(`review-${r}`, 'done');
-          reportSections.push(`## نقد دور ${r} (${critic.name || critic.role})\n${reviewStep.res.text}`);
-          postBlackboard(critic.name || critic.role, author.name || author.role, reviewStep.res.text);
 
           const gateRevise = await maybePause(`اصلاح دور ${r}`);
           if (gateRevise.action === 'skip') {
@@ -1232,12 +1260,16 @@ export function renderAgentTeam(container, { onToast }) {
           const guidance2 = hitlNote ? `\n\nنکته کاربر:\n${hitlNote}` : '';
           hitlNote = '';
 
+          const critiquesBlock = roundCritiques.length === 1
+            ? `نقد منتقد (${roundCritiques[0].name}):\n${roundCritiques[0].text}`
+            : `نقدهای منتقدان:\n${roundCritiques.map((cr, idx) => `### ${idx + 1}. ${cr.name}\n${cr.text}`).join('\n\n')}`;
+
           const reviseStep = await executeAgentStep(
             author,
             `${author.icon || '✨'} ${author.name || author.role}: نسخه اصلاح‌شده (دور ${r})`,
             [
               { role: 'system', content: `نقش تو: ${author.role}\nوظیفه: ${author.instructions}` },
-              { role: 'user', content: `هدف کاربر:\n${goal}\n\nپیش‌نویس قبلی:\n${currentDraft}\n\nنقد منتقد:\n${reviewStep.res.text}${guidance2}\n\nنسخه اصلاح‌شده و نهایی را کامل بنویس.` },
+              { role: 'user', content: `هدف کاربر:\n${goal}\n\nپیش‌نویس قبلی:\n${currentDraft}\n\n${critiquesBlock}${guidance2}\n\nنسخه اصلاح‌شده و نهایی را کامل بنویس.` },
             ],
             { isFinal: r === rounds }
           );
@@ -1246,7 +1278,7 @@ export function renderAgentTeam(container, { onToast }) {
           finalCard = reviseStep.card;
           finalText = currentDraft;
           reportSections.push(`## نسخه اصلاح‌شده دور ${r}\n${currentDraft}`);
-          postBlackboard(author.name || author.role, r === rounds ? 'خروجی نهایی' : (critic.name || critic.role), currentDraft);
+          postBlackboard(author.name || author.role, r === rounds ? 'خروجی نهایی' : criticsNames, currentDraft);
           const hr = extractHtmlCode(currentDraft);
           if (hr) bestHtmlFound = hr;
         }
@@ -1326,8 +1358,7 @@ export function renderAgentTeam(container, { onToast }) {
       const finalHtml = extractHtmlCode(finalText) || bestHtmlFound;
       const fullReportMd = reportSections.join('\n\n');
 
-      store.state.lastTeamRun = { goal, fullReportMd, finalHtml: finalHtml || null, ts: Date.now() };
-      store.addTeamRun({
+      const savedRun = store.addTeamRun({
         teamId: team.id,
         teamName: team.name,
         mode: activeMode,
@@ -1337,6 +1368,13 @@ export function renderAgentTeam(container, { onToast }) {
         fullReportMd,
         blackboard: [...blackboardEntries],
       });
+      store.state.lastTeamRun = {
+        goal,
+        fullReportMd: savedRun.fullReportMd,
+        finalHtml: savedRun.finalHtml || null,
+        ts: Date.now(),
+      };
+      store.save();
       histCountEl.textContent = String((store.state.teamRuns || []).length);
       if (activeSubPanel === 'history') renderSubPanel();
 
