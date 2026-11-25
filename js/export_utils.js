@@ -440,10 +440,11 @@ export function exportSessionHtml(session) {
         <h1 class="doc-title">${escapeHtml(title)}</h1>
         <div class="doc-meta">تاریخ: ${escapeHtml(dateStr)} | تعداد پیام‌ها: ${messages.length}${session.folder ? ` | پوشه: ${escapeHtml(session.folder)}` : ''}</div>
       </div>
-      <button type="button" class="print-btn no-print" onclick="window.print()">چاپ / ذخیره PDF</button>
+      <button type="button" id="print-doc-btn" class="print-btn no-print">چاپ / ذخیره PDF</button>
     </header>
     ${renderedMessages || '<p>هیچ پیامی در این گفتگو وجود ندارد.</p>'}
   </main>
+  <script>document.getElementById('print-doc-btn')?.addEventListener('click',function(){window.print();});</script>
 </body>
 </html>`;
 

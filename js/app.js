@@ -35,21 +35,9 @@ function toast(msg) {
   el._tid = setTimeout(() => el.classList.remove('show'), 2500);
 }
 
-window.__copyCode = (btn) => {
-  const code = btn.closest('.code-wrap')?.querySelector('code')?.textContent || '';
-  navigator.clipboard.writeText(code).then(() => {
-    btn.textContent = 'کپی شد ✓';
-    setTimeout(() => (btn.textContent = 'کپی'), 1500);
-  });
-};
-
-window.__toggleCodeWrap = (btn) => {
-  const wrap = btn.closest('.code-wrap');
-  if (!wrap) return;
-  const active = wrap.classList.toggle('code-wrapped');
-  btn.classList.toggle('active', active);
-  btn.setAttribute('aria-pressed', String(active));
-};
+window.addEventListener('ninerouter:storage-error', (e) => {
+  toast(e.detail?.message || 'حافظه مرورگر پر شده است');
+});
 
 window.__openHtmlPreview = (htmlCode) => {
   const frame = document.getElementById('preview-frame');
@@ -1127,6 +1115,33 @@ document.addEventListener('DOMContentLoaded', () => {
     btn.addEventListener('click', () => switchTab(btn.dataset.tab));
   });
 
+  document.getElementById('topbar-target-pill')?.addEventListener('click', () => switchTab('combos'));
+  document.getElementById('btn-add-api-key')?.addEventListener('click', () => switchTab('providers'));
+
+  // Delegated handler for markdown code block actions (copy & wrap toggle)
+  document.addEventListener('click', (e) => {
+    const copyBtn = e.target.closest?.('[data-code-copy]');
+    if (copyBtn) {
+      const code = copyBtn.closest('.code-wrap')?.querySelector('code')?.textContent || '';
+      navigator.clipboard?.writeText(code).then(() => {
+        copyBtn.textContent = 'کپی شد ✓';
+        setTimeout(() => {
+          copyBtn.textContent = 'کپی';
+        }, 1500);
+      });
+      return;
+    }
+
+    const wrapBtn = e.target.closest?.('[data-code-wrap-toggle]');
+    if (wrapBtn) {
+      const wrap = wrapBtn.closest('.code-wrap');
+      if (!wrap) return;
+      const isWrapped = wrap.classList.toggle('code-wrapped');
+      wrapBtn.classList.toggle('active', isWrapped);
+      wrapBtn.setAttribute('aria-pressed', String(isWrapped));
+    }
+  });
+
   document.getElementById('btn-menu').addEventListener('click', () => toggleSidebar(true));
   document.getElementById('backdrop').addEventListener('click', () => toggleSidebar(false));
   document.getElementById('btn-new-chat').addEventListener('click', () => {
@@ -1554,12 +1569,25 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   document.getElementById('btn-export').addEventListener('click', async () => {
-    const pass = window.prompt('رمز عبور برای رمزنگاری بکاپ با AES-GCM (اختیاری - برای بکاپ ساده خالی بگذارید):', '');
+    const pass = window.prompt(
+      'رمز عبور برای رمزنگاری بکاپ با AES-GCM (توصیه می‌شود — برای بکاپ بدون رمز خالی بگذارید):',
+      ''
+    );
     if (pass === null) return;
+    const trimmedPass = pass.trim();
+    if (!trimmedPass) {
+      const confirmed = window.confirm(
+        'هشدار امنیتی: فایل بکاپ بدون رمزنگاری شامل تمام کلیدهای API شما به صورت متن ساده است و هر کسی که این فایل را داشته باشد به تمام کلیدها دسترسی خواهد داشت.\n\nآیا مطمئن هستید که می‌خواهید بدون رمزنگاری ادامه دهید؟'
+      );
+      if (!confirmed) {
+        toast('دانلود بکاپ لغو شد');
+        return;
+      }
+    }
     let payload = store.exportJson();
-    if (pass.trim()) {
+    if (trimmedPass) {
       try {
-        payload = await encryptBackup(store.state, pass.trim());
+        payload = await encryptBackup(store.state, trimmedPass);
         toast('بکاپ رمزنگاری‌شده آماده شد');
       } catch (err) {
         return toast(`خطا در رمزنگاری: ${err.message}`);
@@ -1568,7 +1596,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const blob = new Blob([payload], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `9router-web-backup-${pass.trim() ? 'encrypted-' : ''}${Date.now()}.json`;
+    a.download = `9router-web-backup-${trimmedPass ? 'encrypted-' : ''}${Date.now()}.json`;
     a.click();
   });
 
