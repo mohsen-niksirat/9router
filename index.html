@@ -28,6 +28,7 @@
     <button class="nav-item" data-tab="combos">🔀 کمبو گرافیکی (نودها)</button>
     <button class="nav-item" data-tab="team">🤖 تیم ایجنت‌ها (Swarm)</button>
     <button class="nav-item" data-tab="arena">⚔️ مقایسه مدل‌ها (Arena)</button>
+    <button class="nav-item" data-tab="analytics" data-view="analytics">📊 آمار و هزینه</button>
 
     <div class="sessions-head">تاریخچه گفتگوها</div>
     <input id="ses-search" class="hub-search" style="min-width:0;width:100%;padding:6px 10px;font-size:12.5px;margin-bottom:4px" placeholder="جستجو در گفتگوها..." aria-label="جستجو در گفتگوها">
@@ -35,9 +36,10 @@
     <div class="sessions-list" id="sessions-list"></div>
 
     <div class="sidebar-foot">
-      <button class="btn btn-sm btn-ghost" id="btn-settings">⚙️ تنظیمات</button>
-      <button class="btn btn-sm btn-ghost" id="btn-export">⬇️ بکاپ</button>
-      <button class="btn btn-sm btn-ghost" id="btn-import">⬆️ بازیابی</button>
+      <button class="btn btn-sm btn-ghost" id="btn-prompt-lib" type="button">📚 کتابخانه پرامپت‌ها</button>
+      <button class="btn btn-sm btn-ghost" id="btn-settings" type="button">⚙️ تنظیمات</button>
+      <button class="btn btn-sm btn-ghost" id="btn-export" type="button">⬇️ بکاپ</button>
+      <button class="btn btn-sm btn-ghost" id="btn-import" type="button">⬆️ بازیابی</button>
       <input type="file" id="import-file" accept=".json" style="display:none">
     </div>
   </aside>
@@ -131,6 +133,7 @@
 
               <div class="composer-row">
                 <button class="icon-btn" id="btn-attach" type="button" title="پیوست تصویر یا فایل کد" aria-label="پیوست تصویر یا فایل کد">📎</button>
+                <button class="icon-btn" id="btn-attach-url" type="button" title="افزودن لینک صفحه وب" aria-label="افزودن لینک">🔗</button>
                 <input type="file" id="file-input" accept="image/*,.txt,.js,.ts,.py,.json,.md,.html,.css,.sql,.csv,.yaml,.yml,.xml" multiple style="display:none">
                 <button class="icon-btn" id="btn-voice" type="button" title="ورودی صوتی (فارسی)" aria-label="ورودی صوتی">🎤</button>
                 <button class="mode-pill" id="btn-img-mode" type="button" aria-pressed="false" title="تولید یا ویرایش تصویر">🎨 تصویر</button>
@@ -163,6 +166,11 @@
     <!-- Side-by-Side Arena -->
     <section class="view" id="view-arena">
       <div style="display:flex;flex-direction:column;flex:1;min-height:0" id="arena-mount"></div>
+    </section>
+
+    <!-- Usage & Cost Analytics -->
+    <section class="view" id="view-analytics">
+      <div class="page-scroll" id="analytics-mount"></div>
     </section>
   </main>
 </div>
@@ -205,6 +213,9 @@
     <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-2)">
       <input type="checkbox" id="m-prov-img"> پشتیبانی از تولید/ویرایش تصویر (/images)
     </label>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-2)">
+      <input type="checkbox" id="m-prov-nokey"> بدون نیاز به کلید API (سرور محلی)
+    </label>
     <div class="modal-acts">
       <button class="btn btn-ghost" data-close-modal>لغو</button>
       <button class="btn btn-amber" id="m-prov-save">ذخیره</button>
@@ -230,8 +241,14 @@
 <div class="modal-bg" id="modal-settings">
   <div class="modal">
     <h3>تنظیمات مدل و شبکه</h3>
-    <div class="field"><label>System Prompt</label><textarea id="s-sys" rows="3"></textarea></div>
-    <div class="field"><label>Temperature (0.0 - 2.0)</label><input id="s-temp" type="number" step="0.1" min="0" max="2"></div>
+    <div class="field">
+      <label for="s-sys-preset">پیش‌تنظیم System Prompt (از کتابخانه پرامپت‌ها)</label>
+      <select id="s-sys-preset">
+        <option value="">— انتخاب پیش‌تنظیم —</option>
+      </select>
+    </div>
+    <div class="field"><label for="s-sys">System Prompt</label><textarea id="s-sys" rows="3"></textarea></div>
+    <div class="field"><label for="s-temp">Temperature (0.0 - 2.0)</label><input id="s-temp" type="number" step="0.1" min="0" max="2"></div>
     <div class="field"><label for="s-proxy">CORS Proxy اختیاری (برای ارائه‌دهنده‌های بدون CORS)</label><input id="s-proxy" placeholder="https://your-worker.workers.dev/?url={url}" dir="ltr"></div>
     <div class="field">
       <label for="s-ws-provider">ارائه‌دهنده جستجوی وب (BYOK)</label>
@@ -243,8 +260,85 @@
     </div>
     <div class="field"><label for="s-ws-key">کلید API جستجوی وب</label><input id="s-ws-key" type="password" placeholder="tvly-... / Serper / Brave key" dir="ltr"></div>
     <div class="modal-acts">
-      <button class="btn btn-ghost" data-close-modal>لغو</button>
-      <button class="btn btn-amber" id="s-save">ذخیره</button>
+      <button class="btn btn-ghost" data-close-modal type="button">لغو</button>
+      <button class="btn btn-amber" id="s-save" type="button">ذخیره</button>
+    </div>
+  </div>
+</div>
+
+<!-- Prompt Library Modal -->
+<div class="modal-bg" id="modal-prompts">
+  <div class="modal modal-wide">
+    <div class="pl-header">
+      <h3>📚 کتابخانه پرامپت‌ها</h3>
+      <div class="pl-header-acts">
+        <button class="btn btn-sm btn-ghost" id="pl-export" type="button">⬇️ خروجی JSON</button>
+        <button class="btn btn-sm btn-ghost" id="pl-import" type="button">⬆️ ورودی JSON</button>
+        <input type="file" id="pl-import-file" accept=".json" style="display:none">
+        <button class="btn btn-sm btn-ghost" data-close-modal type="button">بستن ×</button>
+      </div>
+    </div>
+    <div class="pl-toolbar">
+      <input id="pl-search" class="hub-search" type="search" placeholder="جستجو در عنوان یا متن پرامپت..." aria-label="جستجو در پرامپت‌ها">
+      <select id="pl-cat-filter" class="pl-select" aria-label="فیلتر دسته‌بندی"></select>
+      <button class="btn btn-sm btn-amber" id="pl-new-btn" type="button">+ پرامپت جدید</button>
+    </div>
+    <form class="pl-editor" id="pl-editor" hidden>
+      <input type="hidden" id="pl-edit-id">
+      <div class="pl-editor-grid">
+        <div class="field">
+          <label for="pl-title">عنوان</label>
+          <input id="pl-title" placeholder="مثلاً: خلاصه‌سازی مقاله" required>
+        </div>
+        <div class="field">
+          <label for="pl-category">دسته‌بندی</label>
+          <input id="pl-category" placeholder="عمومی، کدنویسی، ترجمه...">
+        </div>
+        <div class="field">
+          <label for="pl-kind">نوع</label>
+          <select id="pl-kind">
+            <option value="prompt">پرامپت گفتگو (/)</option>
+            <option value="system">پیش‌تنظیم System Prompt</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label for="pl-text">متن پرامپت (از {{متغیر}} برای فیلدهای قابل پر کردن استفاده کنید)</label>
+        <textarea id="pl-text" rows="4" placeholder="متن پرامپت را بنویسید... مثلاً: این کد {{language}} را بررسی کن:" required></textarea>
+      </div>
+      <div class="modal-acts">
+        <button class="btn btn-sm btn-ghost" id="pl-cancel-edit" type="button">انصراف</button>
+        <button class="btn btn-sm btn-amber" id="pl-save-btn" type="submit">ذخیره پرامپت</button>
+      </div>
+    </form>
+    <div class="pl-list" id="pl-list"></div>
+  </div>
+</div>
+
+<!-- Prompt Variables Fill-in Modal -->
+<div class="modal-bg" id="modal-prompt-vars">
+  <div class="modal">
+    <h3 id="pv-title">پر کردن متغیرهای پرامپت</h3>
+    <div id="pv-fields" class="pv-fields"></div>
+    <div class="modal-acts">
+      <button class="btn btn-ghost" data-close-modal type="button">لغو</button>
+      <button class="btn btn-amber" id="pv-apply" type="button">درج در پیام</button>
+    </div>
+  </div>
+</div>
+
+<!-- Attach URL Modal -->
+<div class="modal-bg" id="modal-url-attach">
+  <div class="modal">
+    <h3>🔗 افزودن لینک صفحه وب</h3>
+    <div class="field">
+      <label for="url-attach-input">آدرس صفحه (http:// یا https://)</label>
+      <input id="url-attach-input" type="url" placeholder="https://example.com/article" dir="ltr">
+    </div>
+    <div class="url-attach-status" id="url-attach-status" role="status" aria-live="polite" hidden></div>
+    <div class="modal-acts">
+      <button class="btn btn-ghost" data-close-modal type="button">لغو</button>
+      <button class="btn btn-amber" id="url-attach-submit" type="button">دریافت محتوا</button>
     </div>
   </div>
 </div>

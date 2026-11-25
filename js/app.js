@@ -15,9 +15,14 @@ import { searchWeb, buildGroundedPrompt, extractFollowUps, renderSourceCardsHtml
 import { createArtifactController } from './artifacts.js';
 import { createCommandPalette } from './command_palette.js';
 import { exportSessionMarkdown, exportSessionHtml, encryptBackup, decryptBackup, isEncryptedBackup } from './export_utils.js';
+import { renderAnalyticsView } from './analytics.js';
+import { extractVariables, substituteVariables } from './prompt_utils.js';
+import { fetchWebPage } from './web_fetch.js';
 
 let currentTab = 'chat';
 let attachedImages = [];
+let attachedUrls = [];
+let pendingPromptTemplate = null;
 let imageMode = false;
 let activeAbort = null;
 let userScrolledUp = false;
@@ -182,7 +187,7 @@ function renderModelPopover(query = '') {
       if (q && !nameMatches && !matchedModels.length) return '';
 
       const activeKeyCount = (p.keys || []).filter((k) => k.status !== 'dead').length;
-      const keyBadge = activeKeyCount ? `${activeKeyCount} کلید` : 'بدون کلید';
+      const keyBadge = p.noKey ? 'محلی / بدون کلید' : activeKeyCount ? `${activeKeyCount} کلید` : 'بدون کلید';
       const activeModelForProv = t?.type === 'provider' && t.id === p.id
         ? (t.model || p.defaultModel || allModels[0] || '')
         : '';
@@ -205,7 +210,7 @@ function renderModelPopover(query = '') {
         <div class="popover-prov-group">
           <div class="popover-prov-head">
             <span class="popover-prov-name"><span class="node-dot" style="background:${escHtml(p.color || '#f5b942')}"></span>${escHtml(p.name)}</span>
-            <small class="${activeKeyCount ? 'ok' : ''}">${keyBadge}</small>
+            <small class="${(p.noKey || activeKeyCount) ? 'ok' : ''}">${keyBadge}</small>
           </div>
           ${modelRows}
         </div>
@@ -411,9 +416,18 @@ function buildMessageHtml(m, idx) {
         </div>`;
     }
     const imgs = (m.images || []).map((src) => `<img src="${src}" alt="تصویر پیوست‌شده">`).join('');
+    const urlsHtml = (m.urls || [])
+      .filter((u) => u && /^https?:\/\//i.test(String(u.url || '')))
+      .map((u) => {
+        let host = '';
+        try { host = new URL(u.url).hostname; } catch { host = u.url; }
+        const label = u.title || host || u.url;
+        return `<a class="msg-url-chip" href="${escHtml(u.url)}" target="_blank" rel="noopener noreferrer" title="${escHtml(u.url)}">🔗 <span>${escHtml(label)}</span>${u.truncated ? '<span class="url-trunc-badge">خلاصه‌شده</span>' : ''}</a>`;
+      })
+      .join('');
     return `
       <div class="msg user" data-msg-index="${idx}">
-        <div class="bubble">${escHtml(m.content).replace(/\n/g, '<br>')}${imgs ? `<div class="msg-imgs">${imgs}</div>` : ''}</div>
+        <div class="bubble">${escHtml(m.content).replace(/\n/g, '<br>')}${urlsHtml ? `<div class="msg-urls">${urlsHtml}</div>` : ''}${imgs ? `<div class="msg-imgs">${imgs}</div>` : ''}</div>
         <div class="msg-footer">
           <div class="msg-actions" role="toolbar" aria-label="عملیات پیام کاربر">
             <button class="msg-act-btn" type="button" data-action="edit" data-msg-index="${idx}" title="ویرایش و ارسال مجدد">✏️ ویرایش</button>
@@ -542,18 +556,38 @@ function autoGrowInput() {
 
 function renderPreviews() {
   const bar = document.getElementById('composer-previews');
-  if (!attachedImages.length) {
+  if (!attachedImages.length && !attachedUrls.length) {
     bar.classList.remove('show');
     bar.innerHTML = '';
     return;
   }
   bar.classList.add('show');
-  bar.innerHTML = attachedImages
+  const imgChips = attachedImages
     .map((src, i) => `<div class="prev-chip"><img src="${src}" alt="پیش‌نمایش تصویر پیوست"><button type="button" data-rm-img="${i}" aria-label="حذف تصویر">×</button></div>`)
     .join('');
+  const urlChips = attachedUrls
+    .map((u, i) => {
+      let host = '';
+      try { host = new URL(u.url).hostname; } catch { host = u.url; }
+      const label = u.title || host;
+      return `<div class="url-chip" title="${escHtml(u.url)}">
+        <span class="url-chip-icon" aria-hidden="true">🔗</span>
+        <span class="url-chip-label">${escHtml(label)}</span>
+        ${u.truncated ? '<span class="url-trunc-badge">خلاصه‌شده</span>' : ''}
+        <button type="button" class="url-chip-rm" data-rm-url="${i}" aria-label="حذف لینک">×</button>
+      </div>`;
+    })
+    .join('');
+  bar.innerHTML = imgChips + urlChips;
   bar.querySelectorAll('[data-rm-img]').forEach((b) => {
     b.addEventListener('click', () => {
       attachedImages.splice(Number(b.dataset.rmImg), 1);
+      renderPreviews();
+    });
+  });
+  bar.querySelectorAll('[data-rm-url]').forEach((b) => {
+    b.addEventListener('click', () => {
+      attachedUrls.splice(Number(b.dataset.rmUrl), 1);
       renderPreviews();
     });
   });
@@ -582,7 +616,7 @@ function handleFiles(fileList) {
   });
 }
 
-async function streamAssistantResponse({ isImage = false, imagePrompt = '', sourceImage = null } = {}) {
+async function streamAssistantResponse({ isImage = false, imagePrompt = '', sourceImage = null, urlContexts = [] } = {}) {
   const sendBtn = document.getElementById('send-btn');
   const ses = store.getActiveSession();
 
@@ -680,6 +714,23 @@ async function streamAssistantResponse({ isImage = false, imagePrompt = '', sour
           return { role: m.role, content: m.content || '' };
         }),
       ];
+
+      // Attach fetched web page contexts as delimited blocks on the current user turn
+      if (urlContexts.length) {
+        const ctxBlock = urlContexts
+          .map((u) => `--- محتوای صفحه وب (${u.title || u.url}) ---\nURL: ${u.url}\n${u.text}\n--- پایان محتوای صفحه وب ---`)
+          .join('\n\n');
+        const lastApiMsg = apiMessages[apiMessages.length - 1];
+        if (lastApiMsg && lastApiMsg.role === 'user') {
+          if (typeof lastApiMsg.content === 'string') {
+            lastApiMsg.content = lastApiMsg.content ? `${lastApiMsg.content}\n\n${ctxBlock}` : ctxBlock;
+          } else if (Array.isArray(lastApiMsg.content)) {
+            const textPart = lastApiMsg.content.find((p) => p.type === 'text');
+            if (textPart) textPart.text = `${textPart.text}\n\n${ctxBlock}`;
+            else lastApiMsg.content.unshift({ type: 'text', text: ctxBlock });
+          }
+        }
+      }
 
       // Perplexity-style BYOK Web Search when enabled
       const ws = store.state.settings.webSearch || {};
@@ -795,15 +846,21 @@ async function handleSend() {
 
   const inp = document.getElementById('msg-input');
   const text = inp.value.trim();
-  if (!text && !attachedImages.length) return;
+  if (!text && !attachedImages.length && !attachedUrls.length) return;
 
   const ses = store.getActiveSession();
-  if (!ses.messages.length && text) {
-    ses.title = text.slice(0, 36);
+  if (!ses.messages.length && (text || attachedUrls.length)) {
+    ses.title = (text || attachedUrls[0]?.title || attachedUrls[0]?.url || 'گفتگوی جدید').slice(0, 36);
   }
 
   const imgsForRequest = [...attachedImages];
-  const userMsg = { role: 'user', content: text, images: imgsForRequest };
+  const urlsForRequest = [...attachedUrls];
+  const userMsg = {
+    role: 'user',
+    content: text,
+    images: imgsForRequest,
+    urls: urlsForRequest.map(({ title, url, truncated }) => ({ title, url, truncated })),
+  };
   ses.messages.push(userMsg);
   ses.updatedAt = Date.now();
   store.save();
@@ -811,6 +868,7 @@ async function handleSend() {
   inp.value = '';
   inp.style.height = '';
   attachedImages = [];
+  attachedUrls = [];
   editingMsgIdx = null;
   renderPreviews();
   renderSessionsSidebar();
@@ -820,6 +878,7 @@ async function handleSend() {
     isImage: imageMode,
     imagePrompt: text,
     sourceImage: imgsForRequest[0] || null,
+    urlContexts: urlsForRequest,
   });
 }
 
@@ -854,6 +913,8 @@ function switchTab(tab) {
     renderAgentTeam(document.getElementById('team-mount'), { onToast: toast });
   } else if (tab === 'arena') {
     renderArena(document.getElementById('arena-mount'), { onToast: toast });
+  } else if (tab === 'analytics') {
+    renderAnalyticsView(document.getElementById('analytics-mount'), store);
   }
 }
 
@@ -966,6 +1027,8 @@ window.__openAddProviderModal = () => {
   document.getElementById('m-prov-default-model').value = '';
   document.getElementById('m-prov-models').value = '';
   document.getElementById('m-prov-img').checked = false;
+  const noKeyEl = document.getElementById('m-prov-nokey');
+  if (noKeyEl) noKeyEl.checked = false;
   resetProviderModelPicker();
   document.getElementById('modal-prov').classList.add('open');
 };
@@ -982,6 +1045,8 @@ window.__openEditProviderModal = (providerId) => {
   document.getElementById('m-prov-default-model').value = p.defaultModel || '';
   document.getElementById('m-prov-models').value = (p.models || []).join('\n');
   document.getElementById('m-prov-img').checked = Boolean(p.supportsImages);
+  const noKeyEl = document.getElementById('m-prov-nokey');
+  if (noKeyEl) noKeyEl.checked = Boolean(p.noKey);
   resetProviderModelPicker();
   document.getElementById('modal-prov').classList.add('open');
 };
@@ -1045,6 +1110,8 @@ document.addEventListener('DOMContentLoaded', () => {
         { id: 'tab-combos', group: 'بخش‌ها', title: 'کمبو گرافیکی (نودها)', action: () => switchTab('combos') },
         { id: 'tab-team', group: 'بخش‌ها', title: 'تیم ایجنت‌ها (Swarm)', action: () => switchTab('team') },
         { id: 'tab-arena', group: 'بخش‌ها', title: 'مقایسه مدل‌ها (Arena)', action: () => switchTab('arena') },
+        { id: 'tab-analytics', group: 'بخش‌ها', title: 'آمار و هزینه', action: () => switchTab('analytics') },
+        { id: 'act-prompt-lib', group: 'عملیات سریع', title: 'کتابخانه پرامپت‌ها', action: () => document.getElementById('btn-prompt-lib')?.click() },
       ];
       for (const c of store.state.combos) {
         items.push({
@@ -1412,22 +1479,69 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('send-btn').addEventListener('click', handleSend);
   const msgInput = document.getElementById('msg-input');
   const slashMenu = document.getElementById('slash-menu');
+  function insertPromptIntoComposer(promptObj) {
+    if (!promptObj) return;
+    const vars = extractVariables(promptObj.text || '');
+    if (vars.length) {
+      pendingPromptTemplate = promptObj;
+      const titleEl = document.getElementById('pv-title');
+      const fieldsEl = document.getElementById('pv-fields');
+      if (titleEl) titleEl.textContent = `پر کردن متغیرها: ${promptObj.title}`;
+      if (fieldsEl) {
+        fieldsEl.innerHTML = vars
+          .map(
+            (v, idx) => `
+            <div class="field">
+              <label for="pv-var-${idx}">${escHtml(v)}</label>
+              <input id="pv-var-${idx}" data-var-name="${escHtml(v)}" placeholder="مقدار ${escHtml(v)}...">
+            </div>`
+          )
+          .join('');
+      }
+      document.getElementById('modal-prompt-vars')?.classList.add('open');
+      setTimeout(() => document.getElementById('pv-var-0')?.focus(), 30);
+      return;
+    }
+    msgInput.value = (promptObj.text || '') + ' ';
+    autoGrowInput();
+    msgInput.focus();
+  }
+
+  document.getElementById('pv-apply')?.addEventListener('click', () => {
+    if (!pendingPromptTemplate) return;
+    const values = {};
+    document.querySelectorAll('#pv-fields [data-var-name]').forEach((inp) => {
+      values[inp.dataset.varName] = inp.value;
+    });
+    msgInput.value = substituteVariables(pendingPromptTemplate.text || '', values) + ' ';
+    pendingPromptTemplate = null;
+    document.getElementById('modal-prompt-vars')?.classList.remove('open');
+    autoGrowInput();
+    msgInput.focus();
+  });
+
   msgInput.addEventListener('input', () => {
     autoGrowInput();
     if (slashMenu && msgInput.value.startsWith('/')) {
       const q = msgInput.value.slice(1).toLowerCase();
-      const matches = (store.state.prompts || []).filter((p) => p.title.toLowerCase().includes(q));
+      const matches = (store.state.prompts || []).filter(
+        (p) => p.title.toLowerCase().includes(q) || (p.category || '').toLowerCase().includes(q)
+      );
       if (matches.length) {
         slashMenu.innerHTML = matches
-          .map((p) => `<button class="slash-item" type="button" data-prompt-text="${escHtml(p.text)}"><b>/${escHtml(p.title)}</b><span>${escHtml(p.text)}</span></button>`)
+          .map(
+            (p) => `<button class="slash-item" type="button" data-prompt-id="${escHtml(p.id)}">
+              <div class="slash-item-head"><b>/${escHtml(p.title)}</b><span class="slash-cat">${escHtml(p.category || 'عمومی')}</span></div>
+              <span>${escHtml(p.text)}</span>
+            </button>`
+          )
           .join('');
         slashMenu.classList.add('show');
         slashMenu.querySelectorAll('.slash-item').forEach((b) => {
           b.addEventListener('click', () => {
-            msgInput.value = b.dataset.promptText + ' ';
+            const found = (store.state.prompts || []).find((x) => x.id === b.dataset.promptId);
             slashMenu.classList.remove('show');
-            autoGrowInput();
-            msgInput.focus();
+            if (found) insertPromptIntoComposer(found);
           });
         });
       } else {
@@ -1463,6 +1577,7 @@ document.addEventListener('DOMContentLoaded', () => {
         baseUrl,
         apiKey: activeKey,
         corsProxy: store.state.settings.corsProxy || '',
+        noKey: Boolean(document.getElementById('m-prov-nokey')?.checked),
       });
       fetchedProvModels = models;
       if (!models.length) {
@@ -1500,6 +1615,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const defaultModel = document.getElementById('m-prov-default-model').value.trim();
     const models = document.getElementById('m-prov-models').value.split(/[\r\n,،]+/).map((s) => s.trim()).filter(Boolean);
     const supportsImages = document.getElementById('m-prov-img').checked;
+    const noKey = Boolean(document.getElementById('m-prov-nokey')?.checked);
     if (!name || !baseUrl.startsWith('http')) return toast('نام و Base URL معتبر وارد کنید');
     if (id) {
       const existing = store.state.providers.find((x) => x.id === id);
@@ -1507,7 +1623,7 @@ document.addEventListener('DOMContentLoaded', () => {
         defaultModel && existing && defaultModel === existing.defaultModel && !models.includes(defaultModel)
           ? (models[0] || '')
           : defaultModel;
-      const updated = store.updateProvider(id, { name, baseUrl, defaultModel: effectiveDefault, models, supportsImages });
+      const updated = store.updateProvider(id, { name, baseUrl, defaultModel: effectiveDefault, models, supportsImages, noKey });
       if (apiKey && updated && !(updated.keys || []).some((k) => k.value === apiKey)) {
         store.addKey(updated.id, { value: apiKey });
       }
@@ -1516,7 +1632,7 @@ document.addEventListener('DOMContentLoaded', () => {
       switchTab('providers');
       toast('ارائه‌دهنده ویرایش شد');
     } else {
-      const created = store.addProvider({ name, baseUrl, defaultModel, models, supportsImages });
+      const created = store.addProvider({ name, baseUrl, defaultModel, models, supportsImages, noKey });
       if (apiKey && created && !(created.keys || []).some((k) => k.value === apiKey)) {
         store.addKey(created.id, { value: apiKey });
       }
@@ -1538,7 +1654,30 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Settings modal + Export/Import
+  function populateSystemPromptPresets() {
+    const sel = document.getElementById('s-sys-preset');
+    if (!sel) return;
+    const sysPrompts = (store.state.prompts || []).filter((p) => p.kind === 'system');
+    sel.innerHTML = [
+      '<option value="">— انتخاب پیش‌تنظیم —</option>',
+      ...sysPrompts.map(
+        (p) => `<option value="${escHtml(p.id)}">${escHtml(p.title)} (${escHtml(p.category || 'عمومی')})</option>`
+      ),
+    ].join('');
+  }
+
+  document.getElementById('s-sys-preset')?.addEventListener('change', (e) => {
+    const id = e.target.value;
+    if (!id) return;
+    const p = (store.state.prompts || []).find((x) => x.id === id);
+    if (p) {
+      document.getElementById('s-sys').value = p.text || '';
+      toast(`پیش‌تنظیم «${p.title}» اعمال شد`);
+    }
+  });
+
   document.getElementById('btn-settings').addEventListener('click', () => {
+    populateSystemPromptPresets();
     document.getElementById('s-sys').value = store.state.settings.systemPrompt;
     document.getElementById('s-temp').value = store.state.settings.temperature;
     document.getElementById('s-proxy').value = store.state.settings.corsProxy || '';
@@ -1627,6 +1766,228 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     r.readAsText(f);
     e.target.value = '';
+  });
+
+  // ─── Prompt Library Modal ───────────────────────────────────────────────────
+  function renderPromptLibrary() {
+    const listEl = document.getElementById('pl-list');
+    const catSel = document.getElementById('pl-cat-filter');
+    const searchEl = document.getElementById('pl-search');
+    if (!listEl || !catSel) return;
+
+    const all = store.state.prompts || [];
+    const cats = [...new Set(all.map((p) => p.category || 'عمومی'))];
+    const prevCat = catSel.value || '';
+    catSel.innerHTML = [
+      '<option value="">همه دسته‌ها</option>',
+      ...cats.map((c) => `<option value="${escHtml(c)}" ${c === prevCat ? 'selected' : ''}>${escHtml(c)}</option>`),
+    ].join('');
+
+    const q = (searchEl?.value || '').trim().toLowerCase();
+    const activeCat = catSel.value || '';
+    const filtered = all.filter((p) => {
+      if (activeCat && (p.category || 'عمومی') !== activeCat) return false;
+      if (!q) return true;
+      return (
+        (p.title || '').toLowerCase().includes(q) ||
+        (p.text || '').toLowerCase().includes(q) ||
+        (p.category || '').toLowerCase().includes(q)
+      );
+    });
+
+    if (!filtered.length) {
+      listEl.innerHTML = '<div class="muted" style="padding:16px;text-align:center">پرامپتی یافت نشد.</div>';
+      return;
+    }
+
+    listEl.innerHTML = filtered
+      .map(
+        (p) => `
+        <div class="pl-card">
+          <div class="pl-card-head">
+            <div class="pl-card-title">
+              <strong>${escHtml(p.title)}</strong>
+              <span class="slash-cat">${escHtml(p.category || 'عمومی')}</span>
+              <span class="pl-kind-badge ${p.kind === 'system' ? 'sys' : ''}">${p.kind === 'system' ? 'System' : 'Prompt'}</span>
+            </div>
+            <div class="pl-card-acts">
+              ${p.kind !== 'system' ? `<button class="btn btn-sm btn-ghost" type="button" data-pl-use="${escHtml(p.id)}">استفاده</button>` : ''}
+              <button class="btn btn-sm btn-ghost" type="button" data-pl-edit="${escHtml(p.id)}">ویرایش</button>
+              <button class="btn btn-sm btn-ghost" type="button" data-pl-dup="${escHtml(p.id)}">کپی</button>
+              <button class="btn btn-sm btn-danger" type="button" data-pl-del="${escHtml(p.id)}">حذف</button>
+            </div>
+          </div>
+          <div class="pl-card-text">${escHtml(p.text)}</div>
+        </div>`
+      )
+      .join('');
+
+    listEl.querySelectorAll('[data-pl-use]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const p = (store.state.prompts || []).find((x) => x.id === btn.dataset.plUse);
+        if (!p) return;
+        document.getElementById('modal-prompts')?.classList.remove('open');
+        switchTab('chat');
+        insertPromptIntoComposer(p);
+      });
+    });
+
+    listEl.querySelectorAll('[data-pl-edit]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const p = (store.state.prompts || []).find((x) => x.id === btn.dataset.plEdit);
+        if (!p) return;
+        const editor = document.getElementById('pl-editor');
+        document.getElementById('pl-edit-id').value = p.id;
+        document.getElementById('pl-title').value = p.title || '';
+        document.getElementById('pl-category').value = p.category || 'عمومی';
+        document.getElementById('pl-kind').value = p.kind === 'system' ? 'system' : 'prompt';
+        document.getElementById('pl-text').value = p.text || '';
+        if (editor) editor.hidden = false;
+        document.getElementById('pl-title')?.focus();
+      });
+    });
+
+    listEl.querySelectorAll('[data-pl-dup]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        store.duplicatePrompt(btn.dataset.plDup);
+        renderPromptLibrary();
+        toast('پرامپت کپی شد');
+      });
+    });
+
+    listEl.querySelectorAll('[data-pl-del]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        store.deletePrompt(btn.dataset.plDel);
+        renderPromptLibrary();
+        toast('پرامپت حذف شد');
+      });
+    });
+  }
+
+  document.getElementById('btn-prompt-lib')?.addEventListener('click', () => {
+    const editor = document.getElementById('pl-editor');
+    if (editor) editor.hidden = true;
+    renderPromptLibrary();
+    document.getElementById('modal-prompts')?.classList.add('open');
+  });
+
+  document.getElementById('pl-search')?.addEventListener('input', renderPromptLibrary);
+  document.getElementById('pl-cat-filter')?.addEventListener('change', renderPromptLibrary);
+
+  document.getElementById('pl-new-btn')?.addEventListener('click', () => {
+    const editor = document.getElementById('pl-editor');
+    document.getElementById('pl-edit-id').value = '';
+    document.getElementById('pl-title').value = '';
+    document.getElementById('pl-category').value = 'عمومی';
+    document.getElementById('pl-kind').value = 'prompt';
+    document.getElementById('pl-text').value = '';
+    if (editor) editor.hidden = false;
+    document.getElementById('pl-title')?.focus();
+  });
+
+  document.getElementById('pl-cancel-edit')?.addEventListener('click', () => {
+    const editor = document.getElementById('pl-editor');
+    if (editor) editor.hidden = true;
+  });
+
+  document.getElementById('pl-editor')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const id = document.getElementById('pl-edit-id').value.trim();
+    const title = document.getElementById('pl-title').value.trim();
+    const category = document.getElementById('pl-category').value.trim() || 'عمومی';
+    const kind = document.getElementById('pl-kind').value === 'system' ? 'system' : 'prompt';
+    const text = document.getElementById('pl-text').value.trim();
+    if (!title || !text) return toast('عنوان و متن پرامپت الزامی است');
+    if (id) {
+      store.updatePrompt(id, { title, category, kind, text });
+      toast('پرامپت ویرایش شد');
+    } else {
+      store.addPrompt({ title, category, kind, text });
+      toast('پرامپت اضافه شد');
+    }
+    const editor = document.getElementById('pl-editor');
+    if (editor) editor.hidden = true;
+    renderPromptLibrary();
+  });
+
+  document.getElementById('pl-export')?.addEventListener('click', () => {
+    const json = store.exportPromptsJson();
+    const blob = new Blob([json], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `9router-prompts-${Date.now()}.json`;
+    a.click();
+    toast('فایل پرامپت‌ها دانلود شد');
+  });
+
+  document.getElementById('pl-import')?.addEventListener('click', () => {
+    document.getElementById('pl-import-file')?.click();
+  });
+
+  document.getElementById('pl-import-file')?.addEventListener('change', (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = (ev) => {
+      try {
+        store.importPromptsJson(String(ev.target.result || ''));
+        renderPromptLibrary();
+        toast('پرامپت‌ها با موفقیت وارد شدند');
+      } catch (err) {
+        toast(err?.message || 'فایل JSON پرامپت نامعتبر است');
+      }
+    };
+    r.readAsText(f);
+    e.target.value = '';
+  });
+
+  // ─── Attach URL Modal ───────────────────────────────────────────────────────
+  const urlModal = document.getElementById('modal-url-attach');
+  const urlInput = document.getElementById('url-attach-input');
+  const urlStatus = document.getElementById('url-attach-status');
+  const urlSubmit = document.getElementById('url-attach-submit');
+
+  function setUrlStatus(msg = '', isErr = false) {
+    if (!urlStatus) return;
+    if (!msg) {
+      urlStatus.hidden = true;
+      urlStatus.textContent = '';
+      urlStatus.classList.remove('error');
+      return;
+    }
+    urlStatus.hidden = false;
+    urlStatus.textContent = msg;
+    urlStatus.classList.toggle('error', isErr);
+  }
+
+  document.getElementById('btn-attach-url')?.addEventListener('click', () => {
+    if (urlInput) urlInput.value = '';
+    setUrlStatus('');
+    urlModal?.classList.add('open');
+    setTimeout(() => urlInput?.focus(), 30);
+  });
+
+  urlSubmit?.addEventListener('click', async () => {
+    const rawUrl = urlInput?.value.trim() || '';
+    if (!rawUrl) return setUrlStatus('لطفاً یک آدرس معتبر وارد کنید.', true);
+    urlSubmit.disabled = true;
+    urlSubmit.textContent = 'در حال دریافت...';
+    setUrlStatus('در حال دریافت و استخراج متن صفحه...');
+    try {
+      const page = await fetchWebPage({
+        url: rawUrl,
+        corsProxy: store.state.settings.corsProxy || '',
+      });
+      attachedUrls.push(page);
+      renderPreviews();
+      urlModal?.classList.remove('open');
+      toast(`صفحه «${page.title || page.url}» پیوست شد`);
+    } catch (err) {
+      setUrlStatus(err?.message || 'خطا در دریافت صفحه وب', true);
+    } finally {
+      urlSubmit.disabled = false;
+      urlSubmit.textContent = 'دریافت محتوا';
+    }
   });
 
   document.querySelectorAll('[data-close-modal]').forEach((b) => {

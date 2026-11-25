@@ -1,4 +1,4 @@
-const CACHE = '9router-web-v5';
+const CACHE = '9router-web-v6';
 const ASSETS = [
   './',
   './index.html',
@@ -15,6 +15,9 @@ const ASSETS = [
   './js/artifacts.js',
   './js/command_palette.js',
   './js/export_utils.js',
+  './js/analytics.js',
+  './js/prompt_utils.js',
+  './js/web_fetch.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-512-maskable.png',
