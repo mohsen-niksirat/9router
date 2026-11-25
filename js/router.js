@@ -23,14 +23,29 @@ export async function fetchProviderModels({ baseUrl, apiKey = '', corsProxy } = 
   if (!cleanBase || !/^https?:\/\//i.test(cleanBase)) {
     throw new Error('Base URL معتبر وارد کنید (با http:// یا https://).');
   }
-  const url = applyCorsProxy(`${cleanBase}/models`, corsProxy);
   const headers = { Accept: 'application/json' };
   const cleanKey = String(apiKey || '').trim();
   if (cleanKey) {
     headers.Authorization = `Bearer ${cleanKey}`;
   }
 
-  const res = await fetch(url, { method: 'GET', headers });
+  const requestModels = async (endpoint) => {
+    try {
+      return await fetch(applyCorsProxy(endpoint, corsProxy), { method: 'GET', headers });
+    } catch (err) {
+      if (err instanceof TypeError) {
+        throw new Error(
+          'خطای اتصال یا محدودیت CORS از سمت سرور ارائه‌دهنده. اگر این ارائه‌دهنده اجازه درخواست مستقیم از مرورگر را نمی‌دهد، در بخش تنظیمات یک CORS Proxy وارد کنید یا آدرس Base URL (مثلاً /v1) را بررسی کنید.'
+        );
+      }
+      throw err;
+    }
+  };
+
+  let res = await requestModels(`${cleanBase}/models`);
+  if (res.status === 404 && !/\/v1$/i.test(cleanBase)) {
+    res = await requestModels(`${cleanBase}/v1/models`);
+  }
   if (!res.ok) {
     const errText = await res.text().catch(() => '');
     throw new Error(`خطای سرور (${res.status}): ${errText.slice(0, 160) || res.statusText}`);
