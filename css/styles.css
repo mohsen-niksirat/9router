@@ -1247,6 +1247,25 @@ textarea:focus-visible, input:focus-visible { outline: 2px solid var(--focus-rin
 }
 .team-desc-hint { font-size: 12px; color: var(--text-3); }
 
+.team-bulk-model {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 7px 10px; border-radius: 10px;
+  background: var(--surface); border: 1px solid var(--border);
+  max-width: 100%; min-width: 0;
+}
+.team-bulk-label {
+  font-size: 12px; font-weight: 600; color: var(--text-2);
+  white-space: nowrap; flex-shrink: 0;
+}
+.team-bulk-select {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 5px 9px; font-size: 12.5px; color: var(--text);
+  max-width: 100%; min-width: 0; flex: 0 1 auto;
+}
+.team-bulk-select[hidden] { display: none; }
+.light-mode .team-bulk-model { background: var(--surface); border-color: var(--border); }
+.light-mode .team-bulk-select { background: var(--bg); border-color: var(--border-strong); color: var(--text); }
+
 .hitl-toggle {
   display: inline-flex; align-items: center; gap: 7px;
   padding: 5px 11px; border-radius: 99px; font-size: 12px; font-weight: 600;
@@ -1366,6 +1385,12 @@ textarea:focus-visible, input:focus-visible { outline: 2px solid var(--focus-rin
     min-height: 44px; min-width: 44px;
   }
   .team-studio-toolbar .btn { min-height: 44px; }
+  .team-bulk-model { padding: 8px; gap: 6px; }
+  .team-bulk-label { width: 100%; }
+  .team-bulk-model .team-bulk-select,
+  .team-bulk-model .btn {
+    min-height: 44px; flex: 1 1 140px; min-width: 0; max-width: 100%;
+  }
 }
 
 

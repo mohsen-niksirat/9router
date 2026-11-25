@@ -645,6 +645,19 @@ export function renderAgentTeam(container, { onToast }) {
         <span class="team-mode-flow-hint">${escHtml(modeInfo.flow)}</span>
         ${team.description ? `<span class="team-desc-hint">${escHtml(team.description)}</span>` : ''}
       </div>
+
+      <div class="team-bulk-model" role="group" aria-label="تنظیم سراسری ارائه‌دهنده و مدل تیم">
+        <span class="team-bulk-label">🎛️ مدل سراسری:</span>
+        <select id="team-bulk-prov" class="team-bulk-select" aria-label="ارائه‌دهنده سراسری تیم">
+          <option value="">خودکار (هدف فعال چت)</option>
+          ${store.state.providers
+            .map((p) => `<option value="${escHtml(p.id)}">${escHtml(p.name)}</option>`)
+            .join('')}
+        </select>
+        <select id="team-bulk-model" class="team-bulk-select" aria-label="مدل سراسری تیم" disabled hidden></select>
+        <select id="team-bulk-key" class="team-bulk-select" aria-label="کلید API سراسری تیم" disabled hidden></select>
+        <button type="button" class="btn btn-sm btn-amber" id="btn-team-bulk-apply">اعمال به همه</button>
+      </div>
     </div>
 
     <div class="team-layout">
@@ -1302,6 +1315,73 @@ export function renderAgentTeam(container, { onToast }) {
 
   container.querySelector('#btn-hitl-toggle').addEventListener('click', () => {
     store.updateTeam(team.id, { hitlPause: !team.hitlPause });
+    renderAgentTeam(container, { onToast });
+  });
+
+  // ─── Global Team Provider / Model / Key Selector ──────────
+  const bulkProvSel = container.querySelector('#team-bulk-prov');
+  const bulkModelSel = container.querySelector('#team-bulk-model');
+  const bulkKeySel = container.querySelector('#team-bulk-key');
+  const bulkApplyBtn = container.querySelector('#btn-team-bulk-apply');
+
+  const syncBulkCascade = (keepModel = '', keepKey = '') => {
+    const prov = store.state.providers.find((p) => p.id === bulkProvSel.value);
+    if (!prov) {
+      bulkModelSel.innerHTML = `<option value="">خودکار</option>`;
+      bulkModelSel.disabled = true;
+      bulkModelSel.hidden = true;
+      bulkKeySel.innerHTML = `<option value="">خودکار (چرخش)</option>`;
+      bulkKeySel.disabled = true;
+      bulkKeySel.hidden = true;
+      return;
+    }
+
+    const models = Array.from(new Set([prov.defaultModel, ...(prov.models || [])].filter(Boolean)));
+    bulkModelSel.innerHTML =
+      `<option value="">خودکار (${escHtml(prov.defaultModel || 'پیش‌فرض')})</option>` +
+      models.map((m) => `<option value="${escHtml(m)}" ${m === keepModel ? 'selected' : ''}>${escHtml(m)}</option>`).join('');
+    bulkModelSel.disabled = false;
+    bulkModelSel.hidden = false;
+
+    const keys = prov.keys || [];
+    if (!prov.noKey && keys.length > 0) {
+      bulkKeySel.innerHTML =
+        `<option value="">خودکار (چرخش)</option>` +
+        keys.map((k, idx) => `<option value="${escHtml(k.id)}" ${k.id === keepKey ? 'selected' : ''}>${escHtml(maskKeyLabel(k, idx))}</option>`).join('');
+      bulkKeySel.disabled = false;
+      bulkKeySel.hidden = false;
+    } else {
+      bulkKeySel.innerHTML = `<option value="">خودکار (چرخش)</option>`;
+      bulkKeySel.disabled = true;
+      bulkKeySel.hidden = true;
+    }
+  };
+
+  // Pre-populate if all members share the same provider
+  const allMembers = [team.manager, ...(team.workers || [])].filter(Boolean);
+  const sharedProvId = allMembers.length && allMembers.every((a) => (a.providerId || '') === (allMembers[0].providerId || ''))
+    ? (allMembers[0].providerId || '')
+    : '';
+  const sharedModel = sharedProvId && allMembers.every((a) => (a.model || '') === (allMembers[0].model || ''))
+    ? (allMembers[0].model || '')
+    : '';
+  const sharedKeyId = sharedProvId && allMembers.every((a) => (a.keyId || '') === (allMembers[0].keyId || ''))
+    ? (allMembers[0].keyId || '')
+    : '';
+
+  bulkProvSel.value = sharedProvId;
+  syncBulkCascade(sharedModel, sharedKeyId);
+
+  bulkProvSel.addEventListener('change', () => syncBulkCascade('', ''));
+
+  bulkApplyBtn.addEventListener('click', () => {
+    const providerId = bulkProvSel.value;
+    const model = providerId ? bulkModelSel.value : '';
+    const keyId = providerId && !bulkKeySel.disabled ? bulkKeySel.value : '';
+    const manager = { ...team.manager, providerId, model, keyId };
+    const workers = (team.workers || []).map((w) => ({ ...w, providerId, model, keyId }));
+    store.updateTeam(team.id, { manager, workers });
+    onToast('مدل سراسری روی همه اعضای تیم اعمال شد ✓');
     renderAgentTeam(container, { onToast });
   });
 
