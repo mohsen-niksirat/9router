@@ -5,5 +5,25 @@
   "display": "standalone",
   "background_color": "#14151a",
   "theme_color": "#14151a",
-  "description": "Multi-Provider BYOK AI Chat with Visual Node Combo Builder"
+  "description": "Multi-Provider BYOK AI Chat with Visual Node Combo Builder",
+  "icons": [
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
 }

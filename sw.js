@@ -1,4 +1,4 @@
-const CACHE = '9router-web-v4';
+const CACHE = '9router-web-v5';
 const ASSETS = [
   './',
   './index.html',
@@ -15,6 +15,9 @@ const ASSETS = [
   './js/artifacts.js',
   './js/command_palette.js',
   './js/export_utils.js',
+  './icons/icon-192.png',
+  './icons/icon-512.png',
+  './icons/icon-512-maskable.png',
 ];
 
 self.addEventListener('install', (e) => {

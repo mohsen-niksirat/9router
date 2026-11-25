@@ -170,8 +170,8 @@ function buildCodeBlockHtml(lang, rawCode) {
         `<span class="code-lang">${displayLang}</span>` +
         `<div class="code-actions">` +
           previewBtn +
-          `<button class="code-btn wrap-code-btn" type="button" data-code-wrap-toggle aria-pressed="false" onclick="window.__toggleCodeWrap && window.__toggleCodeWrap(this)">شکستن خط</button>` +
-          `<button class="code-btn copy-code-btn" type="button" data-code-copy onclick="window.__copyCode && window.__copyCode(this)">کپی</button>` +
+          `<button class="code-btn wrap-code-btn" type="button" data-code-wrap-toggle aria-pressed="false">شکستن خط</button>` +
+          `<button class="code-btn copy-code-btn" type="button" data-code-copy>کپی</button>` +
         `</div>` +
       `</div>` +
       `<pre dir="ltr"><code dir="ltr" class="language-${displayLang}">${highlighted}</code></pre>` +
