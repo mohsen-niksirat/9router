@@ -17,6 +17,7 @@ export const BUILTIN_PROVIDERS = [
     pinned: true,
     isBuiltin: true,
     supportsImages: false,
+    noKey: false,
     keys: [],
   },
   {
@@ -30,6 +31,7 @@ export const BUILTIN_PROVIDERS = [
     pinned: true,
     isBuiltin: true,
     supportsImages: true,
+    noKey: false,
     keys: [],
   },
   {
@@ -43,6 +45,7 @@ export const BUILTIN_PROVIDERS = [
     pinned: true,
     isBuiltin: true,
     supportsImages: false,
+    noKey: false,
     keys: [],
   },
   {
@@ -56,6 +59,7 @@ export const BUILTIN_PROVIDERS = [
     pinned: false,
     isBuiltin: true,
     supportsImages: false,
+    noKey: false,
     keys: [],
   },
   {
@@ -69,9 +73,62 @@ export const BUILTIN_PROVIDERS = [
     pinned: false,
     isBuiltin: true,
     supportsImages: false,
+    noKey: false,
+    keys: [],
+  },
+  {
+    id: 'prov_ollama',
+    slug: 'ollama',
+    name: 'Ollama',
+    baseUrl: 'http://localhost:11434/v1',
+    defaultModel: 'llama3.1',
+    models: ['llama3.1', 'qwen2.5', 'mistral'],
+    color: '#a855f7',
+    pinned: false,
+    isBuiltin: true,
+    supportsImages: false,
+    noKey: true,
+    keys: [],
+  },
+  {
+    id: 'prov_lmstudio',
+    slug: 'lmstudio',
+    name: 'LM Studio',
+    baseUrl: 'http://localhost:1234/v1',
+    defaultModel: '',
+    models: [],
+    color: '#14b8a6',
+    pinned: false,
+    isBuiltin: true,
+    supportsImages: false,
+    noKey: true,
     keys: [],
   },
 ];
+
+export const DEFAULT_MODEL_PRICES = {
+  'prov_openrouter|google/gemini-2.5-flash': { inPer1M: 0.15, outPer1M: 0.6 },
+  'prov_openrouter|deepseek/deepseek-r1': { inPer1M: 0.55, outPer1M: 2.19 },
+  'prov_openrouter|anthropic/claude-sonnet-4': { inPer1M: 3.0, outPer1M: 15.0 },
+  'prov_openrouter|openai/gpt-4o-mini': { inPer1M: 0.15, outPer1M: 0.6 },
+  'prov_openai|gpt-4o-mini': { inPer1M: 0.15, outPer1M: 0.6 },
+  'prov_openai|gpt-4o': { inPer1M: 2.5, outPer1M: 10.0 },
+  'prov_openai|gpt-4.1-mini': { inPer1M: 0.4, outPer1M: 1.6 },
+  'prov_gemini|gemini-2.5-flash': { inPer1M: 0.15, outPer1M: 0.6 },
+  'prov_gemini|gemini-2.5-flash-lite': { inPer1M: 0.1, outPer1M: 0.4 },
+  'prov_gemini|gemini-2.5-pro': { inPer1M: 1.25, outPer1M: 10.0 },
+  'prov_groq|llama-3.3-70b-versatile': { inPer1M: 0.59, outPer1M: 0.79 },
+  'prov_groq|llama-3.1-8b-instant': { inPer1M: 0.05, outPer1M: 0.08 },
+  'prov_groq|deepseek-r1-distill-llama-70b': { inPer1M: 0.75, outPer1M: 0.99 },
+  'prov_deepseek|deepseek-chat': { inPer1M: 0.27, outPer1M: 1.1 },
+  'prov_deepseek|deepseek-reasoner': { inPer1M: 0.55, outPer1M: 2.19 },
+  'prov_ollama|llama3.1': { inPer1M: 0, outPer1M: 0 },
+  'prov_ollama|qwen2.5': { inPer1M: 0, outPer1M: 0 },
+  'prov_ollama|mistral': { inPer1M: 0, outPer1M: 0 },
+};
+
+const USAGE_MAX_EVENTS = 1000;
+const USAGE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 
 export const ROUTING_POLICIES = {
   fallback: { label: 'Fallback (Priority)', labelFa: 'فالبک اولویتی', desc: 'Try nodes in chain order; switch automatically on error' },
@@ -147,6 +204,50 @@ function normalizeTeam(team = {}, index = 0) {
   };
 }
 
+function normalizeProvider(p = {}) {
+  return {
+    ...p,
+    models: Array.isArray(p.models) ? p.models : [],
+    keys: Array.isArray(p.keys) ? p.keys : [],
+    noKey: Boolean(p.noKey),
+  };
+}
+
+function normalizePrompt(p = {}, index = 0) {
+  const kind = p.kind === 'system' ? 'system' : 'prompt';
+  const category = String(p.category || '').trim() || 'عمومی';
+  return {
+    id: String(p.id || `prm_${index + 1}`),
+    title: String(p.title || '').trim() || 'پرامپت بدون عنوان',
+    text: String(p.text || ''),
+    category,
+    kind,
+  };
+}
+
+function pruneUsageEvents(events, now = Date.now()) {
+  if (!Array.isArray(events)) return [];
+  const cutoff = now - USAGE_MAX_AGE_MS;
+  const recent = events.filter((e) => e && typeof e === 'object' && Number(e.ts) >= cutoff);
+  return recent.length > USAGE_MAX_EVENTS ? recent.slice(-USAGE_MAX_EVENTS) : recent;
+}
+
+function normalizeModelPrices(raw) {
+  const merged = { ...clone(DEFAULT_MODEL_PRICES) };
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    for (const [k, v] of Object.entries(raw)) {
+      if (!k || !v || typeof v !== 'object') continue;
+      const inPer1M = Number(v.inPer1M);
+      const outPer1M = Number(v.outPer1M);
+      merged[k] = {
+        inPer1M: Number.isFinite(inPer1M) && inPer1M >= 0 ? inPer1M : 0,
+        outPer1M: Number.isFinite(outPer1M) && outPer1M >= 0 ? outPer1M : 0,
+      };
+    }
+  }
+  return merged;
+}
+
 const DEFAULT_STATE = {
   providers: BUILTIN_PROVIDERS,
   combos: [
@@ -171,9 +272,16 @@ const DEFAULT_STATE = {
   sessions: [],
   activeSessionId: null,
   prompts: [
-    { id: 'prm_1', title: 'کدنویس ارشد', text: 'تو یک مهندس نرم‌افزار ارشد هستی. کد تمیز، بهینه و بدون توضیح اضافه بده.' },
-    { id: 'prm_2', title: 'مترجم روان', text: 'متن زیر را به فارسی بسیار روان، طبیعی و حرفه‌ای ترجمه کن:' },
+    { id: 'prm_1', title: 'کدنویس ارشد', text: 'تو یک مهندس نرم‌افزار ارشد هستی. کد تمیز، بهینه و بدون توضیح اضافه بده.', category: 'کدنویسی', kind: 'system' },
+    { id: 'prm_2', title: 'مترجم روان', text: 'متن زیر را به فارسی بسیار روان، طبیعی و حرفه‌ای ترجمه کن:', category: 'ترجمه', kind: 'prompt' },
+    { id: 'prm_3', title: 'بازبین کد و امنیت', text: 'کد زیر را از نظر باگ‌های احتمالی، آسیب‌پذیری‌های امنیتی، کارایی و خوانایی بررسی کن و اصلاحات پیشنهادی را با دلیل دقیق بنویس:\n', category: 'کدنویسی', kind: 'prompt' },
+    { id: 'prm_4', title: 'مترجم تخصصی فنی', text: 'تو یک مترجم ارشد متون فنی و مهندسی نرم‌افزار هستی. اصطلاحات تخصصی استاندارد را حفظ کن، لحن را دقیق و طبیعی نگه دار و از ترجمه تحت‌اللفظی پرهیز کن.', category: 'ترجمه', kind: 'system' },
+    { id: 'prm_5', title: 'نویسنده مقاله و بلاگ', text: 'درباره موضوع زیر یک مقاله ساختاریافته، جذاب و کاربردی با تیترهای مشخص، مثال‌های واقعی و جمع‌بندی کوتاه بنویس:\n', category: 'تولید محتوا', kind: 'prompt' },
+    { id: 'prm_6', title: 'خلاصه‌ساز و تحلیل‌گر متن', text: 'متن زیر را تحلیل کن و خروجی را در سه بخش «خلاصه اجرایی»، «نکات کلیدی» و «اقدامات پیشنهادی» ارائه بده:\n', category: 'تحلیل', kind: 'prompt' },
+    { id: 'prm_7', title: 'تحلیل‌گر استراتژیک داده', text: 'تو یک تحلیل‌گر ارشد داده و محصول هستی. پاسخ‌ها را ساختاریافته، مبتنی بر شواهد، همراه با مقایسه گزینه‌ها، ریسک‌ها و پیشنهاد عملی ارائه بده.', category: 'تحلیل', kind: 'system' },
   ],
+  usageEvents: [],
+  modelPrices: DEFAULT_MODEL_PRICES,
   teams: [
     {
       id: 'team_web',
@@ -425,15 +533,27 @@ class Store {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return clone(DEFAULT_STATE);
       const parsed = JSON.parse(raw);
+      const migratedProviders = Array.isArray(parsed.providers)
+        ? parsed.providers.map((p) => normalizeProvider(p))
+        : clone(DEFAULT_STATE.providers);
+      const migratedPrompts = Array.isArray(parsed.prompts)
+        ? parsed.prompts.map((p, i) => normalizePrompt(p, i))
+        : clone(DEFAULT_STATE.prompts);
       const migratedTeams = Array.isArray(parsed.teams) && parsed.teams.length > 0
         ? parsed.teams.map((t, i) => normalizeTeam(t, i))
         : clone(DEFAULT_STATE.teams);
       const teamRuns = Array.isArray(parsed.teamRuns) ? parsed.teamRuns.slice(0, 20) : [];
+      const usageEvents = pruneUsageEvents(parsed.usageEvents);
+      const modelPrices = normalizeModelPrices(parsed.modelPrices);
       return {
         ...clone(DEFAULT_STATE),
         ...parsed,
+        providers: migratedProviders,
+        prompts: migratedPrompts,
         teams: migratedTeams,
         teamRuns,
+        usageEvents,
+        modelPrices,
         settings: {
           ...DEFAULT_STATE.settings,
           ...(parsed.settings || {}),
@@ -478,7 +598,7 @@ class Store {
   }
 
   // ─── Providers & Keys (Unified) ───────────────────────────────────────────
-  addProvider({ name, baseUrl, defaultModel = '', models = [], color = '#f59e0b', supportsImages = false }) {
+  addProvider({ name, baseUrl, defaultModel = '', models = [], color = '#f59e0b', supportsImages = false, noKey = false }) {
     let cleanModels = [...new Set(models.map((m) => String(m || '').trim()).filter(Boolean))];
     const cleanDefault = String(defaultModel || '').trim();
     if (cleanDefault && !cleanModels.includes(cleanDefault)) {
@@ -495,6 +615,7 @@ class Store {
       pinned: false,
       isBuiltin: false,
       supportsImages,
+      noKey: Boolean(noKey),
       keys: [],
     };
     this.state.providers.unshift(p);
@@ -510,6 +631,7 @@ class Store {
     const next = { ...patch };
     if (typeof next.name === 'string') next.name = next.name.trim();
     if (typeof next.baseUrl === 'string') next.baseUrl = next.baseUrl.trim().replace(/\/+$/, '');
+    if (next.noKey !== undefined) next.noKey = Boolean(next.noKey);
     if (hasModelsPatch) {
       next.models = [...new Set(next.models.map((m) => String(m || '').trim()).filter(Boolean))];
     }
@@ -840,6 +962,155 @@ class Store {
     return true;
   }
 
+  // ─── Usage Ledger & Model Prices ──────────────────────────────────────────
+  addUsageEvent(evt = {}) {
+    if (!Array.isArray(this.state.usageEvents)) this.state.usageEvents = [];
+    const tokensIn = Math.max(0, Math.round(Number(evt.tokensIn) || 0));
+    const tokensOut = Math.max(0, Math.round(Number(evt.tokensOut) || 0));
+    const rawTotal = Math.max(0, Math.round(Number(evt.totalTokens) || 0));
+    const entry = {
+      ts: Number(evt.ts) || Date.now(),
+      providerId: String(evt.providerId || ''),
+      providerName: String(evt.providerName || ''),
+      model: String(evt.model || ''),
+      tokensIn,
+      tokensOut,
+      totalTokens: rawTotal || (tokensIn + tokensOut),
+      estimated: Boolean(evt.estimated),
+    };
+    this.state.usageEvents.push(entry);
+    if (this.state.usageEvents.length > USAGE_MAX_EVENTS) {
+      this.state.usageEvents = this.state.usageEvents.slice(-USAGE_MAX_EVENTS);
+    }
+    this.save();
+    return entry;
+  }
+
+  setModelPrice(key, { inPer1M = 0, outPer1M = 0 } = {}) {
+    const cleanKey = String(key || '').trim();
+    if (!cleanKey) return null;
+    if (!this.state.modelPrices || typeof this.state.modelPrices !== 'object') {
+      this.state.modelPrices = {};
+    }
+    const inVal = Number(inPer1M);
+    const outVal = Number(outPer1M);
+    const entry = {
+      inPer1M: Number.isFinite(inVal) && inVal >= 0 ? inVal : 0,
+      outPer1M: Number.isFinite(outVal) && outVal >= 0 ? outVal : 0,
+    };
+    this.state.modelPrices[cleanKey] = entry;
+    this.save();
+    return entry;
+  }
+
+  deleteModelPrice(key) {
+    const cleanKey = String(key || '').trim();
+    if (!cleanKey || !this.state.modelPrices || !Object.prototype.hasOwnProperty.call(this.state.modelPrices, cleanKey)) {
+      return false;
+    }
+    delete this.state.modelPrices[cleanKey];
+    this.save();
+    return true;
+  }
+
+  // ─── Prompt Library Pro ───────────────────────────────────────────────────
+  addPrompt(data = {}) {
+    if (!Array.isArray(this.state.prompts)) this.state.prompts = [];
+    const prompt = normalizePrompt(
+      {
+        ...data,
+        id: this.uid('prm'),
+      },
+      this.state.prompts.length,
+    );
+    this.state.prompts.unshift(prompt);
+    this.save();
+    return prompt;
+  }
+
+  updatePrompt(id, patch = {}) {
+    if (!Array.isArray(this.state.prompts)) return null;
+    const idx = this.state.prompts.findIndex((p) => p.id === id);
+    if (idx === -1) return null;
+    const current = this.state.prompts[idx];
+    const updated = normalizePrompt({ ...current, ...patch, id: current.id }, idx);
+    this.state.prompts[idx] = updated;
+    this.save();
+    return updated;
+  }
+
+  deletePrompt(id) {
+    if (!Array.isArray(this.state.prompts)) return false;
+    const prevLen = this.state.prompts.length;
+    this.state.prompts = this.state.prompts.filter((p) => p.id !== id);
+    if (this.state.prompts.length === prevLen) return false;
+    this.save();
+    return true;
+  }
+
+  duplicatePrompt(id) {
+    if (!Array.isArray(this.state.prompts)) return null;
+    const idx = this.state.prompts.findIndex((p) => p.id === id);
+    if (idx === -1) return null;
+    const src = this.state.prompts[idx];
+    const copy = normalizePrompt(
+      {
+        ...clone(src),
+        id: this.uid('prm'),
+        title: `${src.title} (کپی)`,
+      },
+      this.state.prompts.length,
+    );
+    this.state.prompts.splice(idx + 1, 0, copy);
+    this.save();
+    return copy;
+  }
+
+  exportPromptsJson() {
+    const prompts = Array.isArray(this.state.prompts) ? this.state.prompts : [];
+    return JSON.stringify({ version: 1, prompts }, null, 2);
+  }
+
+  importPromptsJson(jsonStr) {
+    if (typeof jsonStr !== 'string' || !jsonStr.trim()) {
+      throw new Error('متن JSON خالی است. لطفاً فایل یا متن معتبر پرامپت‌ها را وارد کنید.');
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(jsonStr);
+    } catch {
+      throw new Error('فرمت JSON نامعتبر است. لطفاً ساختار فایل را بررسی کنید.');
+    }
+    const rawList = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' && Array.isArray(parsed.prompts) ? parsed.prompts : null);
+    if (!rawList) {
+      throw new Error('ساختار فایل پرامپت‌ها نامعتبر است؛ آرایه‌ای از پرامپت‌ها مورد انتظار است.');
+    }
+    if (rawList.length === 0) {
+      throw new Error('فایل واردشده هیچ پرامپتی ندارد.');
+    }
+    const validated = [];
+    for (let i = 0; i < rawList.length; i++) {
+      const item = rawList[i];
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        throw new Error(`آیتم شماره ${i + 1} در فایل پرامپت‌ها ساختار معتبر ندارد.`);
+      }
+      if (typeof item.title !== 'string' || !item.title.trim()) {
+        throw new Error(`پرامپت شماره ${i + 1} عنوان معتبر ندارد.`);
+      }
+      if (typeof item.text !== 'string' || !item.text.trim()) {
+        throw new Error(`پرامپت شماره ${i + 1} متن معتبر ندارد.`);
+      }
+      if (item.kind !== undefined && item.kind !== 'prompt' && item.kind !== 'system') {
+        throw new Error(`نوع (kind) پرامپت شماره ${i + 1} نامعتبر است؛ فقط prompt یا system مجاز است.`);
+      }
+      validated.push(normalizePrompt({ ...item, id: this.uid('prm') }, i));
+    }
+    if (!Array.isArray(this.state.prompts)) this.state.prompts = [];
+    this.state.prompts = [...validated, ...this.state.prompts];
+    this.save();
+    return validated;
+  }
+
   // ─── Export / Import Backup ───────────────────────────────────────────────
   exportJson() {
     return JSON.stringify(this.state, null, 2);
@@ -848,15 +1119,25 @@ class Store {
   importJson(raw) {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed.providers)) throw new Error('Invalid backup file');
+    const migratedProviders = parsed.providers.map((p) => normalizeProvider(p));
+    const migratedPrompts = Array.isArray(parsed.prompts)
+      ? parsed.prompts.map((p, i) => normalizePrompt(p, i))
+      : clone(DEFAULT_STATE.prompts);
     const migratedTeams = Array.isArray(parsed.teams) && parsed.teams.length > 0
       ? parsed.teams.map((t, i) => normalizeTeam(t, i))
       : clone(DEFAULT_STATE.teams);
     const teamRuns = Array.isArray(parsed.teamRuns) ? parsed.teamRuns.slice(0, 20) : [];
+    const usageEvents = pruneUsageEvents(parsed.usageEvents);
+    const modelPrices = normalizeModelPrices(parsed.modelPrices);
     this.state = {
       ...clone(DEFAULT_STATE),
       ...parsed,
+      providers: migratedProviders,
+      prompts: migratedPrompts,
       teams: migratedTeams,
       teamRuns,
+      usageEvents,
+      modelPrices,
     };
     this.save();
   }

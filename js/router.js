@@ -7,6 +7,33 @@
 
 import { store } from './store.js';
 
+const LOCAL_PROVIDER_HINT = 'برای سرورهای محلی (Ollama/LM Studio): Ollama را با OLLAMA_ORIGINS=* اجرا کنید یا 9Router را به‌صورت محلی باز کنید تا محدودیت CORS/HTTPS مرورگر مانع اتصال نشود.';
+
+function isLocalUrl(url) {
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(String(url || '').trim());
+}
+
+function isLocalProvider(prov) {
+  return Boolean(prov?.noKey) || isLocalUrl(prov?.baseUrl);
+}
+
+function estimateInputTokens(messages) {
+  if (!Array.isArray(messages)) return 0;
+  let chars = 0;
+  for (const m of messages) {
+    if (!m) continue;
+    if (typeof m.content === 'string') {
+      chars += m.content.length;
+    } else if (Array.isArray(m.content)) {
+      for (const part of m.content) {
+        if (typeof part === 'string') chars += part.length;
+        else if (typeof part?.text === 'string') chars += part.text.length;
+      }
+    }
+  }
+  return Math.ceil(chars / 4);
+}
+
 function applyCorsProxy(url, proxyOverride) {
   const proxy = (proxyOverride !== undefined ? proxyOverride : store.state.settings.corsProxy || '').trim();
   if (!proxy) return url;
@@ -18,25 +45,28 @@ function applyCorsProxy(url, proxyOverride) {
  * @param {{ baseUrl: string, apiKey?: string, corsProxy?: string }} opts
  * @returns {Promise<string[]>}
  */
-export async function fetchProviderModels({ baseUrl, apiKey = '', corsProxy } = {}) {
+export async function fetchProviderModels({ baseUrl, apiKey = '', corsProxy, noKey = false } = {}) {
   const cleanBase = String(baseUrl || '').trim().replace(/\/+$/, '');
   if (!cleanBase || !/^https?:\/\//i.test(cleanBase)) {
     throw new Error('Base URL معتبر وارد کنید (با http:// یا https://).');
   }
   const headers = { Accept: 'application/json' };
   const cleanKey = String(apiKey || '').trim();
-  if (cleanKey) {
+  if (cleanKey && !noKey) {
     headers.Authorization = `Bearer ${cleanKey}`;
   }
+  const localTarget = Boolean(noKey) || isLocalUrl(cleanBase);
 
   const requestModels = async (endpoint) => {
     try {
       return await fetch(applyCorsProxy(endpoint, corsProxy), { method: 'GET', headers });
     } catch (err) {
       if (err instanceof TypeError) {
-        throw new Error(
-          'خطای اتصال یا محدودیت CORS از سمت سرور ارائه‌دهنده. اگر این ارائه‌دهنده اجازه درخواست مستقیم از مرورگر را نمی‌دهد، در بخش تنظیمات یک CORS Proxy وارد کنید یا آدرس Base URL (مثلاً /v1) را بررسی کنید.'
-        );
+        const baseMsg = 'خطای اتصال یا محدودیت CORS از سمت سرور ارائه‌دهنده. اگر این ارائه‌دهنده اجازه درخواست مستقیم از مرورگر را نمی‌دهد، در بخش تنظیمات یک CORS Proxy وارد کنید یا آدرس Base URL (مثلاً /v1) را بررسی کنید.';
+        throw new Error(localTarget ? `${baseMsg}\n${LOCAL_PROVIDER_HINT}` : baseMsg);
+      }
+      if (localTarget) {
+        throw new Error(`${err?.message || 'خطای اتصال به سرور محلی.'}\n${LOCAL_PROVIDER_HINT}`);
       }
       throw err;
     }
@@ -312,16 +342,20 @@ export async function runChatCompletion({ messages, onStream, onMeta, signal, ta
   let lastError = null;
   for (const entry of entries) {
     const prov = entry.provider;
+    const isNoKey = prov.noKey === true;
+    const localTarget = isLocalProvider(prov);
     const triedKeys = new Set();
     const pinnedKey =
-      target?.type === 'provider' && target?.keyId
+      !isNoKey && target?.type === 'provider' && target?.keyId
         ? (prov.keys || []).find((k) => k.id === target.keyId) || null
         : null;
-    const maxAttempts = pinnedKey ? 1 : Math.max(1, prov.keys.length);
+    const maxAttempts = isNoKey ? 1 : (pinnedKey ? 1 : Math.max(1, prov.keys.length));
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const key = pinnedKey || pickKey(prov, policy, triedKeys);
-      if (!key) break;
-      triedKeys.add(key.id);
+      const key = isNoKey ? null : (pinnedKey || pickKey(prov, policy, triedKeys));
+      if (!isNoKey) {
+        if (!key) break;
+        triedKeys.add(key.id);
+      }
 
       const model = entry.model || target?.model || prov.defaultModel || prov.models[0] || '';
       if (!model) {
@@ -333,27 +367,37 @@ export async function runChatCompletion({ messages, onStream, onMeta, signal, ta
       let ttftMs = null;
 
       try {
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${key.value}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model,
-            messages,
-            temperature:
-              typeof temperature === 'number' && !Number.isNaN(temperature)
-                ? temperature
-                : Number(store.state.settings.temperature ?? 0.7),
-            max_tokens:
-              typeof maxTokens === 'number' && !Number.isNaN(maxTokens)
-                ? maxTokens
-                : Number(store.state.settings.maxTokens ?? 4096),
-            stream: true,
-          }),
-          signal,
-        });
+        const headers = { 'Content-Type': 'application/json' };
+        if (!isNoKey && key) {
+          headers.Authorization = `Bearer ${key.value}`;
+        }
+        let res;
+        try {
+          res = await fetch(url, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              model,
+              messages,
+              temperature:
+                typeof temperature === 'number' && !Number.isNaN(temperature)
+                  ? temperature
+                  : Number(store.state.settings.temperature ?? 0.7),
+              max_tokens:
+                typeof maxTokens === 'number' && !Number.isNaN(maxTokens)
+                  ? maxTokens
+                  : Number(store.state.settings.maxTokens ?? 4096),
+              stream: true,
+            }),
+            signal,
+          });
+        } catch (fetchErr) {
+          if (fetchErr?.name === 'AbortError') throw fetchErr;
+          if (localTarget) {
+            throw new Error(`${fetchErr?.message || 'خطای اتصال به سرور محلی.'}\n${LOCAL_PROVIDER_HINT}`);
+          }
+          throw fetchErr;
+        }
 
         if (!res.ok) {
           const errText = await res.text().catch(() => '');
@@ -392,8 +436,16 @@ export async function runChatCompletion({ messages, onStream, onMeta, signal, ta
 
         const totalMs = Math.round(performance.now() - t0);
         if (ttftMs === null) ttftMs = totalMs;
-        const tokensOut = out.usage?.completion_tokens || Math.ceil((out.text.length + out.thinking.length) / 4);
-        const tokens = out.usage?.total_tokens || tokensOut;
+        const hasApiUsage = Boolean(
+          out.usage &&
+          (typeof out.usage.prompt_tokens === 'number' || typeof out.usage.completion_tokens === 'number')
+        );
+        const estIn = estimateInputTokens(messages);
+        const estOut = Math.ceil((out.text.length + out.thinking.length) / 4);
+        const tokensIn = typeof out.usage?.prompt_tokens === 'number' ? out.usage.prompt_tokens : estIn;
+        const tokensOut = typeof out.usage?.completion_tokens === 'number' ? out.usage.completion_tokens : estOut;
+        const totalTokens = typeof out.usage?.total_tokens === 'number' ? out.usage.total_tokens : tokensIn + tokensOut;
+        const estimated = !hasApiUsage;
         const tokPerSec = Math.round((tokensOut / Math.max(0.05, totalMs / 1000)) * 10) / 10;
 
         const meta = {
@@ -401,17 +453,31 @@ export async function runChatCompletion({ messages, onStream, onMeta, signal, ta
           modelId: model,
           ttftMs,
           totalMs,
+          tokensIn,
           tokensOut,
+          totalTokens,
+          estimated,
           tokPerSec,
           done: true,
         };
         onMeta?.(meta);
 
-        key.lastUsedAt = Date.now();
-        key.tokens = (key.tokens || 0) + tokens;
-        key.failures = 0;
-        key.status = 'active';
-        store.save();
+        if (!isNoKey && key) {
+          key.lastUsedAt = Date.now();
+          key.tokens = (key.tokens || 0) + totalTokens;
+          key.failures = 0;
+          key.status = 'active';
+        }
+        store.addUsageEvent({
+          ts: Date.now(),
+          providerId: prov.id,
+          providerName: prov.name,
+          model,
+          tokensIn,
+          tokensOut,
+          totalTokens,
+          estimated,
+        });
 
         return {
           text: out.text,
@@ -420,8 +486,11 @@ export async function runChatCompletion({ messages, onStream, onMeta, signal, ta
           providerName: prov.name,
           model,
           modelId: model,
-          tokens,
+          tokens: totalTokens,
+          tokensIn,
           tokensOut,
+          totalTokens,
+          estimated,
           elapsedMs: totalMs,
           totalMs,
           ttftMs,
@@ -431,10 +500,12 @@ export async function runChatCompletion({ messages, onStream, onMeta, signal, ta
       } catch (err) {
         if (err.name === 'AbortError') throw err;
         lastError = err;
-        key.failures = (key.failures || 0) + 1;
-        if (err.status === 401 || err.status === 403) key.status = 'dead';
-        else if (err.status === 429) key.status = 'cooldown';
-        store.save();
+        if (!isNoKey && key) {
+          key.failures = (key.failures || 0) + 1;
+          if (err.status === 401 || err.status === 403) key.status = 'dead';
+          else if (err.status === 429) key.status = 'cooldown';
+          store.save();
+        }
       }
     }
   }

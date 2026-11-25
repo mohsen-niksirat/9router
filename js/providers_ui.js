@@ -64,7 +64,9 @@ export function renderProvidersHub(container, { onToast, onSelectForChat }) {
           const letter = (p.name || 'A')[0].toUpperCase();
           const shownModels = p.models.slice(0, 3);
           const extraCount = Math.max(0, p.models.length - 3);
-          const keysHtml = p.keys.length
+          const keysHtml = p.noKey
+            ? `<div class="local-help-note">سرور محلی بدون نیاز به کلید API. برای دسترسی از مرورگر در Ollama متغیر <code dir="ltr">OLLAMA_ORIGINS=*</code> را تنظیم کنید و توجه داشته باشید مرورگرها از صفحه HTTPS به سرور HTTP محلی محدودیت Mixed Content دارند.</div>`
+            : p.keys.length
             ? p.keys
                 .map(
                   (k) => `
@@ -86,7 +88,7 @@ export function renderProvidersHub(container, { onToast, onSelectForChat }) {
                 <div class="prov-id">
                   <div class="prov-badge" style="background:${escHtml(p.color || '#6366f1')}">${escHtml(letter)}</div>
                   <div class="prov-titles">
-                    <div class="prov-name">${escHtml(p.name)} ${p.supportsImages ? '<span class="img-cap" title="پشتیبانی از تولید/ویرایش تصویر">🎨</span>' : ''}</div>
+                    <div class="prov-name">${escHtml(p.name)} ${p.noKey ? '<span class="local-badge">محلی / بدون کلید</span>' : ''} ${p.supportsImages ? '<span class="img-cap" title="پشتیبانی از تولید/ویرایش تصویر">🎨</span>' : ''}</div>
                     <div class="prov-url" title="${escHtml(p.baseUrl)}">${escHtml(p.baseUrl)}</div>
                   </div>
                 </div>
@@ -100,8 +102,9 @@ export function renderProvidersHub(container, { onToast, onSelectForChat }) {
               </div>
 
               <div class="key-stats">
-                <span class="stat-pill ${activeCount > 0 ? 'green' : ''}">${activeCount} فعال</span>
-                <span class="stat-pill">کل: ${p.keys.length}</span>
+                ${p.noKey
+                  ? '<span class="stat-pill green">محلی / بدون کلید</span>'
+                  : `<span class="stat-pill ${activeCount > 0 ? 'green' : ''}">${activeCount} فعال</span><span class="stat-pill">کل: ${p.keys.length}</span>`}
               </div>
 
               <div class="keys-stack">${keysHtml}</div>
