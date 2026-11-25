@@ -3,6 +3,8 @@
  * Unified Providers & Keys, Visual Node Combos, Chat Sessions, Prompt Library, Settings.
  */
 
+import { computeAutoLayout, normalizeTeamLayout } from './team_graph.js';
+
 const STORAGE_KEY = 'ninerouter_web_v1';
 
 export const BUILTIN_PROVIDERS = [
@@ -191,7 +193,7 @@ function normalizeTeam(team = {}, index = 0) {
       instructions: '',
     }),
   );
-  return {
+  const normalized = {
     id: String(team.id || `team_${index + 1}`),
     name: String(team.name || 'تیم جدید').trim() || 'تیم جدید',
     icon: String(team.icon || '🤖').trim() || '🤖',
@@ -202,6 +204,8 @@ function normalizeTeam(team = {}, index = 0) {
     manager,
     workers,
   };
+  normalized.layout = normalizeTeamLayout({ ...normalized, layout: team.layout });
+  return normalized;
 }
 
 function normalizeProvider(p = {}) {
@@ -505,6 +509,8 @@ const DEFAULT_STATE = {
   },
   rrCursor: 0,
 };
+
+DEFAULT_STATE.teams = DEFAULT_STATE.teams.map((t, i) => normalizeTeam(t, i));
 
 function clone(obj) {
   return JSON.parse(JSON.stringify(obj));
@@ -857,7 +863,20 @@ class Store {
     const copy = clone(src);
     copy.id = this.uid('team');
     copy.name = `${src.name} (کپی)`;
-    copy.workers = (copy.workers || []).map((w) => ({ ...w, id: this.uid('w') }));
+    const workerIdMap = new Map();
+    copy.workers = (copy.workers || []).map((w) => {
+      const newId = this.uid('w');
+      workerIdMap.set(w.id, newId);
+      return { ...w, id: newId };
+    });
+    if (copy.layout && copy.layout.nodes && typeof copy.layout.nodes === 'object') {
+      const remappedNodes = {};
+      for (const [k, pos] of Object.entries(copy.layout.nodes)) {
+        const targetKey = workerIdMap.has(k) ? workerIdMap.get(k) : k;
+        remappedNodes[targetKey] = { ...pos };
+      }
+      copy.layout = { nodes: remappedNodes };
+    }
     const normalized = normalizeTeam(copy, this.state.teams.length);
     this.state.teams.push(normalized);
     this.save();
@@ -879,6 +898,7 @@ class Store {
       },
     );
     team.workers.push(w);
+    team.layout = normalizeTeamLayout(team);
     this.save();
     return w;
   }
@@ -901,8 +921,34 @@ class Store {
     const prevLen = team.workers.length;
     team.workers = team.workers.filter((w) => w.id !== workerId);
     if (team.workers.length === prevLen) return false;
+    if (team.layout?.nodes && Object.prototype.hasOwnProperty.call(team.layout.nodes, workerId)) {
+      delete team.layout.nodes[workerId];
+    }
     this.save();
     return true;
+  }
+
+  setTeamNodePosition(teamId, nodeKey, x, y) {
+    const team = this.state.teams.find((t) => t.id === teamId);
+    if (!team) return null;
+    const key = String(nodeKey || '').trim();
+    const nx = Number(x);
+    const ny = Number(y);
+    if (!key || !Number.isFinite(nx) || !Number.isFinite(ny)) return null;
+    if (!team.layout || !team.layout.nodes || typeof team.layout.nodes !== 'object') {
+      team.layout = normalizeTeamLayout(team);
+    }
+    team.layout.nodes[key] = { x: Math.round(nx), y: Math.round(ny) };
+    this.save();
+    return team.layout.nodes[key];
+  }
+
+  resetTeamLayout(teamId) {
+    const team = this.state.teams.find((t) => t.id === teamId);
+    if (!team) return null;
+    team.layout = computeAutoLayout(team);
+    this.save();
+    return team.layout;
   }
 
   moveTeamWorker(teamId, workerId, dir) {
