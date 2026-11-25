@@ -1,4 +1,4 @@
-const CACHE = '9router-web-v7';
+const CACHE = '9router-web-v8';
 const ASSETS = [
   './',
   './index.html',
