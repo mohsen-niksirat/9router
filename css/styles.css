@@ -514,16 +514,67 @@ textarea:focus-visible, input:focus-visible { outline: 2px solid var(--focus-rin
 
 .modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 60; align-items: center; justify-content: center; padding: 16px; }
 .modal-bg.open { display: flex; }
-.modal { width: 100%; max-width: 440px; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 16px; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+.modal { width: 100%; max-width: 480px; max-height: 90vh; overflow-y: auto; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 16px; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
 .field { display: flex; flex-direction: column; gap: 5px; }
 .field label { font-size: 12.5px; color: var(--text-2); }
+.field-label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
 .field input, .field textarea, .field select { background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 9px 11px; font-size: 13.5px; }
 .modal-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
 
+.model-picker {
+  display: flex; flex-direction: column; gap: 8px;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  border-radius: 10px; padding: 8px;
+}
+.model-picker[hidden] { display: none; }
+.model-picker-head { display: flex; align-items: center; gap: 8px; }
+.model-picker-search {
+  flex: 1; min-width: 0; background: var(--bg) !important;
+  border: 1px solid var(--border) !important; border-radius: 8px !important;
+  padding: 6px 10px !important; font-size: 12.5px !important;
+}
+.model-picker-count {
+  font-size: 11.5px; font-weight: 600; color: var(--text-2);
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 7px; padding: 3px 8px; white-space: nowrap; flex-shrink: 0;
+}
+.model-picker-list {
+  max-height: 170px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px;
+  padding-left: 2px;
+}
+.model-picker-item {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 6px 8px; border-radius: 7px; font-size: 12.5px; color: var(--text);
+  background: var(--bg); border: 1px solid var(--border);
+  cursor: pointer; direction: ltr; text-align: left;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.model-picker-item:hover { background: var(--surface-2); border-color: var(--border-strong); }
+.model-picker-item.selected { border-color: var(--amber); background: rgba(245, 185, 66, 0.1); }
+.light-mode .model-picker-item.selected { border-color: #b45309; background: rgba(180, 83, 9, 0.08); }
+.model-picker-item input[type="checkbox"] {
+  width: 15px; height: 15px; accent-color: var(--amber); flex-shrink: 0; cursor: pointer;
+}
+.model-picker-item span {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+.model-picker-empty { font-size: 12px; color: var(--text-3); text-align: center; padding: 10px 6px; }
+.model-picker-status {
+  font-size: 12px; padding: 6px 10px; border-radius: 8px;
+  background: var(--surface); border: 1px solid var(--border); color: var(--text-2);
+}
+.model-picker-status[hidden] { display: none; }
+.model-picker-status.error {
+  color: var(--danger); border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.08);
+}
+
 .toast {
-  position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%) translateY(16px);
+  position: fixed; top: 68px; bottom: auto; left: 50%; transform: translateX(-50%) translateY(-12px);
   background: var(--send-bg); color: var(--send-fg); padding: 8px 16px; border-radius: 99px;
-  font-size: 13px; font-weight: 600; opacity: 0; pointer-events: none; transition: all 0.2s; z-index: 90;
+  font-size: 13px; font-weight: 600; opacity: 0; pointer-events: none;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  transition: opacity 0.2s ease, transform 0.2s ease; z-index: 90;
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 

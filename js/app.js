@@ -6,7 +6,7 @@
 
 import { store } from './store.js';
 import { renderMarkdown, escHtml } from './markdown.js';
-import { runChatCompletion, runImageGeneration } from './router.js';
+import { runChatCompletion, runImageGeneration, fetchProviderModels } from './router.js';
 import { renderProvidersHub } from './providers_ui.js';
 import { renderComboGraph } from './combo_graph.js';
 import { renderAgentTeam } from './agent_team.js';
@@ -751,6 +751,104 @@ function switchTab(tab) {
   }
 }
 
+// ─── Provider Modal Online Model Picker ───────────────────────────────────────
+let fetchedProvModels = [];
+
+function parseProvModelsInput() {
+  const raw = document.getElementById('m-prov-models')?.value || '';
+  return raw.split(/[\r\n,،]+/).map((s) => s.trim()).filter(Boolean);
+}
+
+function writeProvModelsInput(models) {
+  const ta = document.getElementById('m-prov-models');
+  if (ta) ta.value = models.join('\n');
+}
+
+function setProvFetchStatus(text = '', isError = false) {
+  const el = document.getElementById('m-prov-fetch-status');
+  if (!el) return;
+  if (!text) {
+    el.hidden = true;
+    el.textContent = '';
+    el.classList.remove('error');
+    return;
+  }
+  el.hidden = false;
+  el.textContent = text;
+  el.classList.toggle('error', isError);
+}
+
+function resetProviderModelPicker() {
+  fetchedProvModels = [];
+  const picker = document.getElementById('m-prov-picker');
+  const search = document.getElementById('m-prov-picker-search');
+  const list = document.getElementById('m-prov-picker-list');
+  const count = document.getElementById('m-prov-picker-count');
+  if (picker) picker.hidden = true;
+  if (search) search.value = '';
+  if (list) list.innerHTML = '';
+  if (count) count.textContent = '';
+  setProvFetchStatus('');
+}
+
+function renderProviderModelPicker() {
+  const picker = document.getElementById('m-prov-picker');
+  const search = document.getElementById('m-prov-picker-search');
+  const list = document.getElementById('m-prov-picker-list');
+  const count = document.getElementById('m-prov-picker-count');
+  if (!picker || !list) return;
+
+  if (!fetchedProvModels.length) {
+    picker.hidden = true;
+    return;
+  }
+  picker.hidden = false;
+  if (search) search.placeholder = `جستجو در بین ${fetchedProvModels.length} مدل...`;
+
+  const selectedSet = new Set(parseProvModelsInput());
+  const q = (search?.value || '').trim().toLowerCase();
+  const filtered = q
+    ? fetchedProvModels.filter((m) => m.toLowerCase().includes(q))
+    : fetchedProvModels;
+
+  const selectedInFetched = fetchedProvModels.filter((m) => selectedSet.has(m)).length;
+  if (count) count.textContent = `${selectedInFetched} انتخاب‌شده`;
+
+  if (!filtered.length) {
+    list.innerHTML = '<div class="model-picker-empty">مدلی با این عبارت پیدا نشد.</div>';
+    return;
+  }
+
+  list.innerHTML = filtered
+    .map((m) => {
+      const checked = selectedSet.has(m);
+      return `<label class="model-picker-item ${checked ? 'selected' : ''}" role="option" aria-selected="${checked}">
+        <input type="checkbox" data-pick-model="${escHtml(m)}" ${checked ? 'checked' : ''}>
+        <span title="${escHtml(m)}">${escHtml(m)}</span>
+      </label>`;
+    })
+    .join('');
+
+  list.querySelectorAll('input[data-pick-model]').forEach((cb) => {
+    cb.addEventListener('change', () => {
+      const modelId = cb.dataset.pickModel;
+      const cur = parseProvModelsInput();
+      const idx = cur.indexOf(modelId);
+      if (cb.checked && idx === -1) {
+        cur.push(modelId);
+      } else if (!cb.checked && idx !== -1) {
+        cur.splice(idx, 1);
+      }
+      writeProvModelsInput(cur);
+      cb.closest('.model-picker-item')?.classList.toggle('selected', cb.checked);
+      cb.closest('.model-picker-item')?.setAttribute('aria-selected', String(cb.checked));
+      const nowSet = new Set(cur);
+      const selCount = fetchedProvModels.filter((m) => nowSet.has(m)).length;
+      if (count) count.textContent = `${selCount} انتخاب‌شده`;
+    });
+  });
+}
+
 // ─── Modals ───────────────────────────────────────────────────────────────────
 window.__openAddProviderModal = () => {
   document.getElementById('m-prov-id').value = '';
@@ -760,6 +858,7 @@ window.__openAddProviderModal = () => {
   document.getElementById('m-prov-default-model').value = '';
   document.getElementById('m-prov-models').value = '';
   document.getElementById('m-prov-img').checked = false;
+  resetProviderModelPicker();
   document.getElementById('modal-prov').classList.add('open');
 };
 
@@ -773,6 +872,7 @@ window.__openEditProviderModal = (providerId) => {
   document.getElementById('m-prov-default-model').value = p.defaultModel || '';
   document.getElementById('m-prov-models').value = (p.models || []).join('\n');
   document.getElementById('m-prov-img').checked = Boolean(p.supportsImages);
+  resetProviderModelPicker();
   document.getElementById('modal-prov').classList.add('open');
 };
 
@@ -1202,6 +1302,55 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   msgInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+  });
+
+  // Online Fetch Models in Add/Edit Provider Modal
+  const fetchModelsBtn = document.getElementById('m-prov-fetch-models');
+  fetchModelsBtn?.addEventListener('click', async () => {
+    const baseUrl = document.getElementById('m-prov-url')?.value.trim() || '';
+    if (!baseUrl || !/^https?:\/\//i.test(baseUrl)) {
+      setProvFetchStatus('ابتدا یک Base URL معتبر (با http:// یا https://) وارد کنید.', true);
+      return;
+    }
+    const provId = document.getElementById('m-prov-id')?.value.trim() || '';
+    const prov = provId ? store.state.providers.find((x) => x.id === provId) : null;
+    const activeKey = prov?.keys?.find((k) => k.status !== 'dead')?.value || '';
+
+    fetchModelsBtn.disabled = true;
+    fetchModelsBtn.textContent = 'در حال دریافت...';
+    setProvFetchStatus('در حال دریافت لیست مدل‌ها...');
+
+    try {
+      const models = await fetchProviderModels({
+        baseUrl,
+        apiKey: activeKey,
+        corsProxy: store.state.settings.corsProxy || '',
+      });
+      fetchedProvModels = models;
+      if (!models.length) {
+        document.getElementById('m-prov-picker')?.setAttribute('hidden', '');
+        setProvFetchStatus('هیچ مدلی از این آدرس برگردانده نشد.', true);
+      } else {
+        setProvFetchStatus('');
+        renderProviderModelPicker();
+        document.getElementById('m-prov-picker-search')?.focus();
+      }
+    } catch (err) {
+      fetchedProvModels = [];
+      document.getElementById('m-prov-picker')?.setAttribute('hidden', '');
+      setProvFetchStatus(err?.message || 'خطا در دریافت لیست مدل‌ها', true);
+    } finally {
+      fetchModelsBtn.disabled = false;
+      fetchModelsBtn.textContent = '🔄 دریافت آنلاین مدل‌ها';
+    }
+  });
+
+  document.getElementById('m-prov-picker-search')?.addEventListener('input', () => {
+    renderProviderModelPicker();
+  });
+
+  document.getElementById('m-prov-models')?.addEventListener('input', () => {
+    if (fetchedProvModels.length) renderProviderModelPicker();
   });
 
   // Modals submit

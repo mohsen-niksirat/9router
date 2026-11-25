@@ -7,10 +7,52 @@
 
 import { store } from './store.js';
 
-function applyCorsProxy(url) {
-  const proxy = (store.state.settings.corsProxy || '').trim();
+function applyCorsProxy(url, proxyOverride) {
+  const proxy = (proxyOverride !== undefined ? proxyOverride : store.state.settings.corsProxy || '').trim();
   if (!proxy) return url;
   return proxy.includes('{url}') ? proxy.replace('{url}', encodeURIComponent(url)) : `${proxy.replace(/\/+$/, '')}/${url}`;
+}
+
+/**
+ * Fetch available model IDs from an OpenAI-compatible GET /models endpoint.
+ * @param {{ baseUrl: string, apiKey?: string, corsProxy?: string }} opts
+ * @returns {Promise<string[]>}
+ */
+export async function fetchProviderModels({ baseUrl, apiKey = '', corsProxy } = {}) {
+  const cleanBase = String(baseUrl || '').trim().replace(/\/+$/, '');
+  if (!cleanBase || !/^https?:\/\//i.test(cleanBase)) {
+    throw new Error('Base URL معتبر وارد کنید (با http:// یا https://).');
+  }
+  const url = applyCorsProxy(`${cleanBase}/models`, corsProxy);
+  const headers = { Accept: 'application/json' };
+  const cleanKey = String(apiKey || '').trim();
+  if (cleanKey) {
+    headers.Authorization = `Bearer ${cleanKey}`;
+  }
+
+  const res = await fetch(url, { method: 'GET', headers });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '');
+    throw new Error(`خطای سرور (${res.status}): ${errText.slice(0, 160) || res.statusText}`);
+  }
+
+  const payload = await res.json();
+  let rawList = [];
+  if (Array.isArray(payload)) {
+    rawList = payload;
+  } else if (Array.isArray(payload?.data)) {
+    rawList = payload.data;
+  } else if (Array.isArray(payload?.models)) {
+    rawList = payload.models;
+  }
+
+  const ids = new Set();
+  for (const item of rawList) {
+    const id = typeof item === 'string' ? item : item?.id || item?.name || '';
+    const trimmed = String(id).trim();
+    if (trimmed) ids.add(trimmed);
+  }
+  return Array.from(ids).sort((a, b) => a.localeCompare(b));
 }
 
 /**
