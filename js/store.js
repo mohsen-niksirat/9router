@@ -402,10 +402,22 @@ function clone(obj) {
   return JSON.parse(JSON.stringify(obj));
 }
 
+const RUN_TRUNCATE_NOTE = '\n\n[توجه: به دلیل محدودیت حافظه مرورگر، بخشی از متن کوتاه شد]';
+const MAX_RUN_TEXT_LEN = 100000;
+const MAX_RUN_HTML_LEN = 200000;
+
+function capRunField(val, maxLen) {
+  if (typeof val !== 'string' || val.length <= maxLen) {
+    return { value: val, truncated: false };
+  }
+  return { value: val.slice(0, maxLen) + RUN_TRUNCATE_NOTE, truncated: true };
+}
+
 class Store {
   constructor() {
     this.state = this.load();
     this.listeners = new Set();
+    this._storageErrorNotified = false;
   }
 
   load() {
@@ -437,10 +449,23 @@ class Store {
   }
 
   save() {
+    let ok = true;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
-    } catch {}
+      this._storageErrorNotified = false;
+    } catch {
+      ok = false;
+      if (!this._storageErrorNotified) {
+        this._storageErrorNotified = true;
+        if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+          window.dispatchEvent(new CustomEvent('ninerouter:storage-error', {
+            detail: { message: 'حافظه مرورگر پر شده است. لطفاً تاریخچه یا چت‌های قدیمی را پاک کنید.' },
+          }));
+        }
+      }
+    }
     for (const fn of this.listeners) fn(this.state);
+    return ok;
   }
 
   subscribe(fn) {
@@ -782,6 +807,22 @@ class Store {
     };
     if (!entry.id) entry.id = this.uid('trun');
     if (!entry.createdAt) entry.createdAt = Date.now();
+
+    let wasTruncated = Boolean(entry.truncated);
+    const mdCap = capRunField(entry.fullReportMd, MAX_RUN_TEXT_LEN);
+    entry.fullReportMd = mdCap.value;
+    if (mdCap.truncated) wasTruncated = true;
+
+    const textCap = capRunField(entry.finalText, MAX_RUN_TEXT_LEN);
+    entry.finalText = textCap.value;
+    if (textCap.truncated) wasTruncated = true;
+
+    const htmlCap = capRunField(entry.finalHtml, MAX_RUN_HTML_LEN);
+    entry.finalHtml = htmlCap.value;
+    if (htmlCap.truncated) wasTruncated = true;
+
+    if (wasTruncated) entry.truncated = true;
+
     this.state.teamRuns.unshift(entry);
     if (this.state.teamRuns.length > 20) {
       this.state.teamRuns = this.state.teamRuns.slice(0, 20);
