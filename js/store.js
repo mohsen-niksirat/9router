@@ -195,14 +195,19 @@ class Store {
   }
 
   // ─── Providers & Keys (Unified) ───────────────────────────────────────────
-  addProvider({ name, baseUrl, models = [], color = '#f59e0b', supportsImages = false }) {
-    const cleanModels = models.length ? models : ['gpt-4o-mini'];
+  addProvider({ name, baseUrl, defaultModel = '', models = [], color = '#f59e0b', supportsImages = false }) {
+    let cleanModels = [...new Set(models.map((m) => String(m || '').trim()).filter(Boolean))];
+    const cleanDefault = String(defaultModel || '').trim();
+    if (cleanDefault && !cleanModels.includes(cleanDefault)) {
+      cleanModels = [cleanDefault, ...cleanModels];
+    }
+    if (!cleanModels.length) cleanModels = ['gpt-4o-mini'];
     const p = {
       id: this.uid('prov'),
       slug: name.toLowerCase().replace(/[^a-z0-9]+/g, '_') || this.uid('c'),
       name: name.trim(),
       baseUrl: baseUrl.trim().replace(/\/+$/, ''),
-      defaultModel: cleanModels[0],
+      defaultModel: cleanDefault || cleanModels[0],
       models: cleanModels,
       color,
       pinned: false,
@@ -215,11 +220,25 @@ class Store {
     return p;
   }
 
-  updateProvider(id, patch) {
+  updateProvider(id, patch = {}) {
     const p = this.state.providers.find((x) => x.id === id);
     if (!p) return null;
-    Object.assign(p, patch);
-    if (p.models.length && !p.models.includes(p.defaultModel)) {
+    const next = { ...patch };
+    if (typeof next.name === 'string') next.name = next.name.trim();
+    if (typeof next.baseUrl === 'string') next.baseUrl = next.baseUrl.trim().replace(/\/+$/, '');
+    if (Array.isArray(next.models)) {
+      next.models = [...new Set(next.models.map((m) => String(m || '').trim()).filter(Boolean))];
+    }
+    if (typeof next.defaultModel === 'string') {
+      next.defaultModel = next.defaultModel.trim();
+    }
+    Object.assign(p, next);
+    if (p.defaultModel) {
+      if (!Array.isArray(p.models)) p.models = [];
+      if (!p.models.includes(p.defaultModel)) {
+        p.models = [p.defaultModel, ...p.models];
+      }
+    } else if (Array.isArray(p.models) && p.models.length) {
       p.defaultModel = p.models[0];
     }
     this.save();

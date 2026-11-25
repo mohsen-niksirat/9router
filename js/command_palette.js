@@ -348,9 +348,6 @@ export function createCommandPalette({ getItems, onSelect, shortcuts } = {}) {
           btn.appendChild(kbdWrap);
         }
 
-        btn.addEventListener('mouseenter', () => {
-          updateActiveItem(flatIdx, false);
-        });
         btn.addEventListener('click', () => {
           selectItem(item);
         });
@@ -442,6 +439,16 @@ export function createCommandPalette({ getItems, onSelect, shortcuts } = {}) {
     } else if (e.key === 'Escape') {
       e.preventDefault();
       close();
+    }
+  });
+
+  listEl.addEventListener('mousemove', (e) => {
+    const btn = e.target.closest('.cmd-item');
+    if (!btn || !listEl.contains(btn)) return;
+    const optionEls = Array.from(listEl.querySelectorAll('.cmd-item'));
+    const idx = optionEls.indexOf(btn);
+    if (idx !== -1 && idx !== activeIndex) {
+      updateActiveItem(idx, false);
     }
   });
 

@@ -753,10 +753,26 @@ function switchTab(tab) {
 
 // ─── Modals ───────────────────────────────────────────────────────────────────
 window.__openAddProviderModal = () => {
+  document.getElementById('m-prov-id').value = '';
+  document.getElementById('m-prov-title').textContent = 'افزودن ارائه‌دهنده';
   document.getElementById('m-prov-name').value = '';
   document.getElementById('m-prov-url').value = '';
+  document.getElementById('m-prov-default-model').value = '';
   document.getElementById('m-prov-models').value = '';
   document.getElementById('m-prov-img').checked = false;
+  document.getElementById('modal-prov').classList.add('open');
+};
+
+window.__openEditProviderModal = (providerId) => {
+  const p = store.state.providers.find((x) => x.id === providerId);
+  if (!p) return;
+  document.getElementById('m-prov-id').value = p.id;
+  document.getElementById('m-prov-title').textContent = 'ویرایش ارائه‌دهنده';
+  document.getElementById('m-prov-name').value = p.name || '';
+  document.getElementById('m-prov-url').value = p.baseUrl || '';
+  document.getElementById('m-prov-default-model').value = p.defaultModel || '';
+  document.getElementById('m-prov-models').value = (p.models || []).join('\n');
+  document.getElementById('m-prov-img').checked = Boolean(p.supportsImages);
   document.getElementById('modal-prov').classList.add('open');
 };
 
@@ -1190,15 +1206,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Modals submit
   document.getElementById('m-prov-save').addEventListener('click', () => {
+    const id = document.getElementById('m-prov-id').value.trim();
     const name = document.getElementById('m-prov-name').value.trim();
     const baseUrl = document.getElementById('m-prov-url').value.trim();
+    const defaultModel = document.getElementById('m-prov-default-model').value.trim();
     const models = document.getElementById('m-prov-models').value.split(/[\r\n,،]+/).map((s) => s.trim()).filter(Boolean);
     const supportsImages = document.getElementById('m-prov-img').checked;
     if (!name || !baseUrl.startsWith('http')) return toast('نام و Base URL معتبر وارد کنید');
-    store.addProvider({ name, baseUrl, models, supportsImages });
-    document.getElementById('modal-prov').classList.remove('open');
-    switchTab('providers');
-    toast('ارائه‌دهنده اضافه شد');
+    if (id) {
+      store.updateProvider(id, { name, baseUrl, defaultModel, models, supportsImages });
+      updateTargetPill();
+      document.getElementById('modal-prov').classList.remove('open');
+      switchTab('providers');
+      toast('ارائه‌دهنده ویرایش شد');
+    } else {
+      store.addProvider({ name, baseUrl, defaultModel, models, supportsImages });
+      document.getElementById('modal-prov').classList.remove('open');
+      switchTab('providers');
+      toast('ارائه‌دهنده اضافه شد');
+    }
   });
 
   document.getElementById('m-key-save').addEventListener('click', () => {

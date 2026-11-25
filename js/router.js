@@ -91,31 +91,48 @@ function pickKey(provider, policy, triedKeyIds) {
   return candidates[0];
 }
 
-function extractContentParts(content) {
-  if (!content) return { text: '', thinking: '' };
-  if (typeof content === 'string') return { text: content, thinking: '' };
+function extractTextParts(val) {
+  if (val == null) return { text: '', thinking: '' };
+  if (typeof val === 'string') return { text: val, thinking: '' };
+  if (typeof val !== 'object') return { text: '', thinking: '' };
 
   let text = '';
   let thinking = '';
-  const items = Array.isArray(content) ? content : [content];
+  const items = Array.isArray(val) ? val : [val];
   for (const item of items) {
-    if (!item) continue;
+    if (item == null) continue;
     if (typeof item === 'string') {
       text += item;
-    } else if (item.type === 'thinking' || item.type === 'reasoning') {
-      if (typeof item.thinking === 'string') thinking += item.thinking;
-      else if (Array.isArray(item.thinking)) {
-        for (const sub of item.thinking) {
-          if (typeof sub === 'string') thinking += sub;
-          else if (sub?.text) thinking += sub.text;
-        }
-      } else if (typeof item.text === 'string') {
-        thinking += item.text;
+      continue;
+    }
+    if (typeof item !== 'object') continue;
+
+    if (item.type === 'thinking' || item.type === 'reasoning') {
+      if (item.thinking != null) {
+        const sub = extractTextParts(item.thinking);
+        thinking += sub.thinking + sub.text;
+      } else if (item.text != null) {
+        const sub = extractTextParts(item.text);
+        thinking += sub.thinking + sub.text;
+      } else if (item.content != null) {
+        const sub = extractTextParts(item.content);
+        thinking += sub.thinking + sub.text;
       }
-    } else if (typeof item.text === 'string') {
-      text += item.text;
-    } else if (typeof item.content === 'string') {
-      text += item.content;
+      continue;
+    }
+
+    if (item.thinking != null) {
+      const sub = extractTextParts(item.thinking);
+      thinking += sub.thinking + sub.text;
+    }
+    if (item.text != null) {
+      const sub = extractTextParts(item.text);
+      text += sub.text;
+      thinking += sub.thinking;
+    } else if (item.content != null) {
+      const sub = extractTextParts(item.content);
+      text += sub.text;
+      thinking += sub.thinking;
     }
   }
   return { text, thinking };
@@ -147,14 +164,18 @@ async function parseSSE(res, onStream, signal, onFirstToken) {
       const ev = JSON.parse(payload);
       if (ev.usage) usage = ev.usage;
       const d = ev.choices?.[0]?.delta || {};
-      const r = d.reasoning_content || d.reasoning || '';
-      if (typeof r === 'string' && r) {
-        markFirstToken();
-        thinking += r;
-        onStream?.({ type: 'thinking', thinking, text: accumulated });
+      const rRaw = d.reasoning_content ?? d.reasoning;
+      if (rRaw != null) {
+        const rParts = extractTextParts(rRaw);
+        const rText = rParts.thinking + rParts.text;
+        if (rText) {
+          markFirstToken();
+          thinking += rText;
+          onStream?.({ type: 'thinking', thinking, text: accumulated });
+        }
       }
-      if (d.content) {
-        const parts = extractContentParts(d.content);
+      if (d.content != null) {
+        const parts = extractTextParts(d.content);
         if (parts.thinking) {
           markFirstToken();
           thinking += parts.thinking;
@@ -262,10 +283,12 @@ export async function runChatCompletion({ messages, onStream, onMeta, signal, ta
         if (ct.includes('application/json') || !res.body?.getReader) {
           const data = await res.json();
           ttftMs = Math.round(performance.now() - attemptStart);
-          const parts = extractContentParts(data.choices?.[0]?.message?.content);
+          const msg = data.choices?.[0]?.message || {};
+          const contentParts = extractTextParts(msg.content);
+          const reasoningParts = extractTextParts(msg.reasoning_content ?? msg.reasoning);
           out = {
-            text: parts.text,
-            thinking: parts.thinking,
+            text: contentParts.text,
+            thinking: [reasoningParts.thinking, reasoningParts.text, contentParts.thinking].filter(Boolean).join(''),
             usage: data.usage,
           };
         } else {

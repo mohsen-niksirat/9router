@@ -95,7 +95,8 @@ export function renderProvidersHub(container, { onToast, onSelectForChat }) {
 
               <div class="model-tags">
                 ${shownModels.map((m) => `<span class="m-tag ${m === p.defaultModel ? 'def' : ''}" data-set-def="${p.id}::${escHtml(m)}" title="کلیک برای انتخاب به عنوان پیش‌فرض">${escHtml(m)}</span>`).join('')}
-                ${extraCount > 0 ? `<span class="m-tag more">+${extraCount}</span>` : ''}
+                ${extraCount > 0 ? `<span class="m-tag more" data-edit-prov="${p.id}" title="مشاهده و ویرایش همه مدل‌ها">+${extraCount}</span>` : ''}
+                <button class="m-tag" type="button" data-quick-add-model="${p.id}" title="افزودن سریع مدل جدید">+ مدل</button>
               </div>
 
               <div class="key-stats">
@@ -107,6 +108,7 @@ export function renderProvidersHub(container, { onToast, onSelectForChat }) {
 
               <div class="prov-card-foot">
                 <button class="btn btn-sm btn-ghost" data-add-key="${p.id}">+ کلید جدید</button>
+                <button class="btn btn-sm btn-ghost" data-edit-prov="${p.id}">✏️ ویرایش</button>
                 <button class="btn btn-sm btn-ghost" data-chat-prov="${p.id}">💬 چت مستقیم</button>
                 ${!p.isBuiltin ? `<button class="btn btn-sm btn-danger" data-del-prov="${p.id}">حذف</button>` : ''}
               </div>
@@ -155,6 +157,24 @@ export function renderProvidersHub(container, { onToast, onSelectForChat }) {
   container.querySelectorAll('[data-add-key]').forEach((btn) => {
     btn.addEventListener('click', () => {
       window.__openAddKeyModal?.(btn.dataset.addKey);
+    });
+  });
+
+  container.querySelectorAll('[data-edit-prov]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      window.__openEditProviderModal?.(btn.dataset.editProv);
+    });
+  });
+
+  container.querySelectorAll('[data-quick-add-model]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const p = store.state.providers.find((x) => x.id === btn.dataset.quickAddModel);
+      if (!p) return;
+      const model = window.prompt(`نام مدل جدید برای ${p.name}:`, '');
+      if (!model || !model.trim()) return;
+      store.updateProvider(p.id, { models: [...(p.models || []), model.trim()] });
+      onToast(`مدل ${model.trim()} اضافه شد`);
+      renderProvidersHub(container, { onToast, onSelectForChat });
     });
   });
 

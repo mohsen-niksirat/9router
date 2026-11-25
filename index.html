@@ -178,13 +178,15 @@
   </div>
 </div>
 
-<!-- Add Provider Modal -->
+<!-- Add / Edit Provider Modal -->
 <div class="modal-bg" id="modal-prov">
   <div class="modal">
-    <h3>افزودن ارائه‌دهنده سفارشی</h3>
-    <div class="field"><label>نام ارائه‌دهنده</label><input id="m-prov-name" placeholder="مثلاً: CFRouter, AvalAI, Mistral"></div>
-    <div class="field"><label>Base URL</label><input id="m-prov-url" placeholder="https://api.openai.com/v1" dir="ltr"></div>
-    <div class="field"><label>مدل‌ها (هر سطر یک مدل)</label><textarea id="m-prov-models" rows="4" placeholder="gpt-4o-mini&#10;gpt-4o" dir="ltr"></textarea></div>
+    <h3 id="m-prov-title">افزودن ارائه‌دهنده</h3>
+    <input type="hidden" id="m-prov-id">
+    <div class="field"><label for="m-prov-name">نام ارائه‌دهنده</label><input id="m-prov-name" placeholder="مثلاً: CFRouter, AvalAI, Mistral"></div>
+    <div class="field"><label for="m-prov-url">Base URL</label><input id="m-prov-url" placeholder="https://api.openai.com/v1" dir="ltr"></div>
+    <div class="field"><label for="m-prov-default-model">مدل پیش‌فرض (اختیاری)</label><input id="m-prov-default-model" placeholder="مثلاً: gpt-4o-mini" dir="ltr"></div>
+    <div class="field"><label for="m-prov-models">مدل‌ها (هر سطر یا با کاما)</label><textarea id="m-prov-models" rows="4" placeholder="gpt-4o-mini&#10;gpt-4o" dir="ltr"></textarea></div>
     <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-2)">
       <input type="checkbox" id="m-prov-img"> پشتیبانی از تولید/ویرایش تصویر (/images)
     </label>
