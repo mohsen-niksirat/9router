@@ -351,9 +351,9 @@ def run_check(mode: str, save_screenshots: bool):
                     f"window.localStorage.setItem('ninerouter_web_v1', {json.dumps(seed_json)});"
                 )
                 page = context.new_page()
-                page.goto(url, wait_until="domcontentloaded")
-                page.wait_for_selector(".nav-item[data-tab='chat']")
-                page.wait_for_timeout(300)
+                page.goto(url, wait_until="load")
+                page.wait_for_selector("#sessions-list .ses-row", timeout=10000)
+                page.wait_for_timeout(150)
 
                 for state in STATES:
                     open_state(page, state)

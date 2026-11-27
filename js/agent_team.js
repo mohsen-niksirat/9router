@@ -15,6 +15,7 @@ let selectedTeamId = null;
 let teamAbort = null;
 let activeModalCleanup = null;
 let activeSubPanel = null; // null | 'blackboard' | 'history'
+let activeMobTab = 'graph'; // 'graph' | 'feed' | 'config'
 let teamZoom = 1;
 let teamPanX = 0;
 let teamPanY = 0;
@@ -613,21 +614,43 @@ export function renderAgentTeam(container, { onToast }) {
   const layoutNodes = (team.layout?.nodes ? team.layout : normalizeTeamLayout(team)).nodes;
 
   let blackboardEntries = [];
+  const isRunningNow = Boolean(teamAbort);
+
+  container.classList.add('team-studio-root');
+  container.dataset.mobTab = activeMobTab;
 
   container.innerHTML = `
+    <div class="team-mob-tabs" role="tablist" aria-label="بخش‌های استودیو تیم در موبایل">
+      <button type="button" class="team-mob-tab ${activeMobTab === 'graph' ? 'active' : ''}" role="tab" aria-selected="${activeMobTab === 'graph' ? 'true' : 'false'}" data-mob-tab="graph">
+        <span aria-hidden="true">🕸</span>
+        <span>گراف تیم</span>
+      </button>
+      <button type="button" class="team-mob-tab ${activeMobTab === 'feed' ? 'active' : ''}" role="tab" aria-selected="${activeMobTab === 'feed' ? 'true' : 'false'}" data-mob-tab="feed">
+        <span aria-hidden="true">💬</span>
+        <span>خروجی و مراحل</span>
+        <span class="team-mob-live-dot" id="team-mob-live-dot" ${isRunningNow ? '' : 'hidden'} aria-hidden="true"></span>
+      </button>
+      <button type="button" class="team-mob-tab ${activeMobTab === 'config' ? 'active' : ''}" role="tab" aria-selected="${activeMobTab === 'config' ? 'true' : 'false'}" data-mob-tab="config">
+        <span aria-hidden="true">⚙</span>
+        <span>تنظیمات تیم</span>
+      </button>
+    </div>
+
     <div class="team-studio-toolbar">
-      <div class="team-toolbar-row">
-        <div class="team-toolbar-group">
+      <div class="team-toolbar-row team-top-row">
+        <div class="team-toolbar-group team-primary-group">
           <select id="team-select" class="graph-select team-select" aria-label="انتخاب تیم">
             ${store.state.teams.map((t) => `<option value="${escHtml(t.id)}" ${t.id === team.id ? 'selected' : ''}>${escHtml(t.icon || '🤖')} ${escHtml(t.name)}</option>`).join('')}
           </select>
-          <button type="button" class="btn btn-sm btn-amber" id="btn-new-team">+ تیم جدید</button>
-          <button type="button" class="btn btn-sm btn-ghost" id="btn-edit-team" title="ویرایش مشخصات تیم">✏️ ویرایش تیم</button>
-          <button type="button" class="btn btn-sm btn-ghost" id="btn-dup-team" title="کپی گرفتن از این تیم">📋 کپی</button>
-          <button type="button" class="btn btn-sm btn-danger" id="btn-del-team" title="حذف تیم" ${store.state.teams.length <= 1 ? 'disabled' : ''}>🗑️ حذف</button>
+          <div class="team-crud-group">
+            <button type="button" class="btn btn-sm btn-amber" id="btn-new-team">+ تیم جدید</button>
+            <button type="button" class="btn btn-sm btn-ghost" id="btn-edit-team" title="ویرایش مشخصات تیم">✏️ ویرایش تیم</button>
+            <button type="button" class="btn btn-sm btn-ghost" id="btn-dup-team" title="کپی گرفتن از این تیم">📋 کپی</button>
+            <button type="button" class="btn btn-sm btn-danger" id="btn-del-team" title="حذف تیم" ${store.state.teams.length <= 1 ? 'disabled' : ''}>🗑️ حذف</button>
+          </div>
         </div>
 
-        <div class="team-toolbar-group">
+        <div class="team-toolbar-group team-hitl-group">
           <button type="button" class="hitl-toggle ${team.hitlPause ? 'active' : ''}" id="btn-hitl-toggle" role="switch" aria-checked="${team.hitlPause ? 'true' : 'false'}">
             <span class="hitl-dot" aria-hidden="true"></span>
             <span>توقف بین مراحل</span>
@@ -642,8 +665,10 @@ export function renderAgentTeam(container, { onToast }) {
             return `<button type="button" class="studio-mode-pill ${activeMode === m ? 'active' : ''}" data-team-mode="${m}" aria-pressed="${activeMode === m ? 'true' : 'false'}">${MODE_META[m].icon} ${escHtml(label)}</button>`;
           }).join('')}
         </div>
-        <span class="team-mode-flow-hint">${escHtml(modeInfo.flow)}</span>
-        ${team.description ? `<span class="team-desc-hint">${escHtml(team.description)}</span>` : ''}
+        <div class="team-meta-hints">
+          <span class="team-mode-flow-hint">${escHtml(modeInfo.flow)}</span>
+          ${team.description ? `<span class="team-desc-hint">${escHtml(team.description)}</span>` : ''}
+        </div>
       </div>
 
       <div class="team-bulk-model" role="group" aria-label="تنظیم سراسری ارائه‌دهنده و مدل تیم">
@@ -1041,13 +1066,35 @@ export function renderAgentTeam(container, { onToast }) {
   });
 
   applyTeamTransform();
-  requestAnimationFrame(() => {
-    if (lastFittedTeamId !== team.id && canvasEl.clientWidth > 0 && canvasEl.clientWidth < 560) {
+  const refreshGraphViewport = () => {
+    if (canvasEl.clientWidth <= 0) return;
+    if (lastFittedTeamId !== team.id && (window.innerWidth <= 1024 || canvasEl.clientWidth < 800)) {
       fitTeamCanvas();
       lastFittedTeamId = team.id;
     } else {
       drawTeamEdges();
     }
+  };
+
+  requestAnimationFrame(refreshGraphViewport);
+
+  const liveDotEl = container.querySelector('#team-mob-live-dot');
+  const setMobTab = (nextTab) => {
+    if (!['graph', 'feed', 'config'].includes(nextTab)) return;
+    activeMobTab = nextTab;
+    container.dataset.mobTab = nextTab;
+    container.querySelectorAll('[data-mob-tab]').forEach((btn) => {
+      const isAct = btn.dataset.mobTab === nextTab;
+      btn.classList.toggle('active', isAct);
+      btn.setAttribute('aria-selected', isAct ? 'true' : 'false');
+    });
+    if (nextTab === 'graph') {
+      requestAnimationFrame(refreshGraphViewport);
+    }
+  };
+
+  container.querySelectorAll('[data-mob-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => setMobTab(btn.dataset.mobTab));
   });
 
   const resetRunGraphState = () => {
@@ -1406,6 +1453,7 @@ export function renderAgentTeam(container, { onToast }) {
       triggerEl: e.currentTarget,
       onSave: (vals) => {
         store.addTeamWorker(team.id, vals);
+        lastFittedTeamId = null;
         onToast('ایجنت جدید اضافه شد ✓');
         renderAgentTeam(container, { onToast });
       },
@@ -1448,6 +1496,7 @@ export function renderAgentTeam(container, { onToast }) {
   container.querySelectorAll('[data-del-worker]').forEach((btn) => {
     btn.addEventListener('click', () => {
       if (store.deleteTeamWorker(team.id, btn.dataset.delWorker)) {
+        lastFittedTeamId = null;
         onToast('ایجنت حذف شد');
         renderAgentTeam(container, { onToast });
       }
@@ -1497,6 +1546,7 @@ export function renderAgentTeam(container, { onToast }) {
       teamAbort.abort();
       teamAbort = null;
       runBtn.textContent = '🚀 اجرای تیم';
+      if (liveDotEl) liveDotEl.hidden = true;
       setActiveNodes(null);
       setPausedNode(null);
       return;
@@ -1507,6 +1557,10 @@ export function renderAgentTeam(container, { onToast }) {
 
     teamAbort = new AbortController();
     runBtn.textContent = '■ توقف';
+    if (liveDotEl) liveDotEl.hidden = false;
+    if (window.innerWidth <= 860) {
+      setMobTab('feed');
+    }
     feedEl.innerHTML = '';
     blackboardEntries = [];
     bbCountEl.textContent = '0';
@@ -1852,6 +1906,7 @@ export function renderAgentTeam(container, { onToast }) {
       setActiveNodes(null);
       teamAbort = null;
       runBtn.textContent = '🚀 اجرای تیم';
+      if (liveDotEl) liveDotEl.hidden = true;
     }
   });
 }
