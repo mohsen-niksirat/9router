@@ -13,6 +13,7 @@ export const BUILTIN_PROVIDERS = [
     slug: 'apisfreellm',
     name: 'APIsFreeLLM (رایگان)',
     baseUrl: 'https://api.apisfreellm.com/v1',
+    apiType: 'openai',
     defaultModel: 'free-ai',
     models: ['free-ai'],
     color: '#22c55e',
@@ -20,6 +21,21 @@ export const BUILTIN_PROVIDERS = [
     isBuiltin: true,
     supportsImages: false,
     noKey: true,
+    keys: [],
+  },
+  {
+    id: 'prov_manus',
+    slug: 'manus',
+    name: 'Manus AI',
+    baseUrl: 'https://api.manus.ai',
+    apiType: 'manus-v2',
+    defaultModel: 'standard',
+    models: ['standard', 'max', 'lite'],
+    color: '#8b5cf6',
+    pinned: true,
+    isBuiltin: true,
+    supportsImages: true,
+    noKey: false,
     keys: [],
   },
   {
@@ -226,10 +242,31 @@ function normalizeTeam(team = {}, index = 0) {
 function normalizeProvider(p = {}) {
   return {
     ...p,
+    apiType: p.apiType === 'manus-v2' || /api\.manus\.ai/i.test(String(p.baseUrl || '')) ? 'manus-v2' : 'openai',
     models: Array.isArray(p.models) ? p.models : [],
     keys: Array.isArray(p.keys) ? p.keys : [],
     noKey: Boolean(p.noKey),
   };
+}
+
+function mergeBuiltinProviders(rawProviders) {
+  if (!Array.isArray(rawProviders)) {
+    return clone(BUILTIN_PROVIDERS).map((p) => normalizeProvider(p));
+  }
+  const migrated = rawProviders.map((p) => normalizeProvider(p));
+  const existingIds = new Set(migrated.map((p) => p.id));
+  const existingSlugs = new Set(migrated.map((p) => String(p.slug || '').toLowerCase()).filter(Boolean));
+  for (const bp of BUILTIN_PROVIDERS) {
+    const bpSlug = String(bp.slug || '').toLowerCase();
+    const isDuplicateManus =
+      bpSlug === 'manus' &&
+      (existingSlugs.has('manus') ||
+        migrated.some((p) => p.apiType === 'manus-v2' || /api\.manus\.ai/i.test(String(p.baseUrl || ''))));
+    if (!existingIds.has(bp.id) && !isDuplicateManus && !(bpSlug && existingSlugs.has(bpSlug))) {
+      migrated.push(normalizeProvider(clone(bp)));
+    }
+  }
+  return migrated;
 }
 
 function normalizePrompt(p = {}, index = 0) {
@@ -268,7 +305,7 @@ function normalizeModelPrices(raw) {
 }
 
 const DEFAULT_STATE = {
-  providers: BUILTIN_PROVIDERS,
+  providers: BUILTIN_PROVIDERS.map((p) => normalizeProvider(p)),
   combos: [
     {
       id: 'combo_default',
@@ -552,10 +589,14 @@ class Store {
   load() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return clone(DEFAULT_STATE);
+      if (!raw) {
+        const fresh = clone(DEFAULT_STATE);
+        this.state = fresh;
+        return fresh;
+      }
       const parsed = JSON.parse(raw);
       const migratedProviders = Array.isArray(parsed.providers)
-        ? parsed.providers.map((p) => normalizeProvider(p))
+        ? mergeBuiltinProviders(parsed.providers)
         : clone(DEFAULT_STATE.providers);
       const migratedPrompts = Array.isArray(parsed.prompts)
         ? parsed.prompts.map((p, i) => normalizePrompt(p, i))
@@ -566,7 +607,7 @@ class Store {
       const teamRuns = Array.isArray(parsed.teamRuns) ? parsed.teamRuns.slice(0, 20) : [];
       const usageEvents = pruneUsageEvents(parsed.usageEvents);
       const modelPrices = normalizeModelPrices(parsed.modelPrices);
-      return {
+      const nextState = {
         ...clone(DEFAULT_STATE),
         ...parsed,
         providers: migratedProviders,
@@ -584,8 +625,12 @@ class Store {
           },
         },
       };
+      this.state = nextState;
+      return nextState;
     } catch {
-      return clone(DEFAULT_STATE);
+      const fallback = clone(DEFAULT_STATE);
+      this.state = fallback;
+      return fallback;
     }
   }
 
@@ -619,8 +664,13 @@ class Store {
   }
 
   // ─── Providers & Keys (Unified) ───────────────────────────────────────────
-  addProvider({ name, baseUrl, defaultModel = '', models = [], color = '#f59e0b', supportsImages = false, noKey = false }) {
+  addProvider({ name, baseUrl, apiType, defaultModel = '', models = [], color = '#f59e0b', supportsImages = false, noKey = false }) {
+    const cleanBaseUrl = baseUrl.trim().replace(/\/+$/, '');
+    const resolvedApiType = apiType === 'manus-v2' || /api\.manus\.ai/i.test(cleanBaseUrl) ? 'manus-v2' : 'openai';
     let cleanModels = [...new Set(models.map((m) => String(m || '').trim()).filter(Boolean))];
+    if (resolvedApiType === 'manus-v2' && !cleanModels.length) {
+      cleanModels = ['standard', 'max', 'lite'];
+    }
     const cleanDefault = String(defaultModel || '').trim();
     if (cleanDefault && !cleanModels.includes(cleanDefault)) {
       cleanModels = [cleanDefault, ...cleanModels];
@@ -629,7 +679,8 @@ class Store {
       id: this.uid('prov'),
       slug: name.toLowerCase().replace(/[^a-z0-9]+/g, '_') || this.uid('c'),
       name: name.trim(),
-      baseUrl: baseUrl.trim().replace(/\/+$/, ''),
+      baseUrl: cleanBaseUrl,
+      apiType: resolvedApiType,
       defaultModel: cleanDefault || cleanModels[0] || '',
       models: cleanModels,
       color,
@@ -660,6 +711,10 @@ class Store {
       next.defaultModel = next.defaultModel.trim();
     }
     Object.assign(p, next);
+    p.apiType =
+      (next.apiType ?? p.apiType) === 'manus-v2' || /api\.manus\.ai/i.test(String(p.baseUrl || ''))
+        ? 'manus-v2'
+        : 'openai';
     if (!Array.isArray(p.models)) p.models = [];
     if (hasModelsPatch) {
       const userChangedDefault = typeof next.defaultModel === 'string' && next.defaultModel !== '' && next.defaultModel !== prevDefault;
@@ -1180,7 +1235,7 @@ class Store {
   importJson(raw) {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed.providers)) throw new Error('Invalid backup file');
-    const migratedProviders = parsed.providers.map((p) => normalizeProvider(p));
+    const migratedProviders = mergeBuiltinProviders(parsed.providers);
     const migratedPrompts = Array.isArray(parsed.prompts)
       ? parsed.prompts.map((p, i) => normalizePrompt(p, i))
       : clone(DEFAULT_STATE.prompts);

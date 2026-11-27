@@ -6,6 +6,7 @@
  */
 
 import { store } from './store.js';
+import { isManusProvider, runManusTask, MANUS_MODELS } from './manus.js';
 
 const LOCAL_PROVIDER_HINT = 'برای سرورهای محلی (Ollama/LM Studio): Ollama را با OLLAMA_ORIGINS=* اجرا کنید یا 9Router را به‌صورت محلی باز کنید تا محدودیت CORS/HTTPS مرورگر مانع اتصال نشود.';
 
@@ -45,8 +46,11 @@ function applyCorsProxy(url, proxyOverride) {
  * @param {{ baseUrl: string, apiKey?: string, corsProxy?: string }} opts
  * @returns {Promise<string[]>}
  */
-export async function fetchProviderModels({ baseUrl, apiKey = '', corsProxy, noKey = false } = {}) {
+export async function fetchProviderModels({ baseUrl, apiKey = '', corsProxy, noKey = false, provider = null } = {}) {
   const cleanBase = String(baseUrl || '').trim().replace(/\/+$/, '');
+  if (isManusProvider(provider) || /api\.manus\.ai/i.test(cleanBase)) {
+    return [...MANUS_MODELS];
+  }
   if (!cleanBase || !/^https?:\/\//i.test(cleanBase)) {
     throw new Error('Base URL معتبر وارد کنید (با http:// یا https://).');
   }
@@ -317,7 +321,18 @@ async function parseSSE(res, onStream, signal, onFirstToken) {
  * @param {number} [opts.temperature]
  * @param {number} [opts.maxTokens]
  */
-export async function runChatCompletion({ messages, onStream, onMeta, signal, targetOverride = null, temperature, maxTokens }) {
+export async function runChatCompletion({
+  messages,
+  onStream,
+  onMeta,
+  onManusUpdate,
+  manusTaskId = '',
+  pollIntervalMs,
+  signal,
+  targetOverride = null,
+  temperature,
+  maxTokens,
+}) {
   const t0 = performance.now();
   const target = targetOverride || store.state.activeTarget;
   let entries = [];
@@ -342,8 +357,9 @@ export async function runChatCompletion({ messages, onStream, onMeta, signal, ta
   let lastError = null;
   for (const entry of entries) {
     const prov = entry.provider;
-    const isNoKey = prov.noKey === true;
-    const localTarget = isLocalProvider(prov);
+    const isManus = isManusProvider(prov);
+    const isNoKey = prov.noKey === true && !isManus;
+    const localTarget = isLocalProvider(prov) && !isManus;
     const triedKeys = new Set();
     const pinnedKey =
       !isNoKey && target?.type === 'provider' && target?.keyId
@@ -357,16 +373,137 @@ export async function runChatCompletion({ messages, onStream, onMeta, signal, ta
         triedKeys.add(key.id);
       }
 
-      const model = entry.model || target?.model || prov.defaultModel || prov.models[0] || '';
+      const rawModel = entry.model || target?.model || prov.defaultModel || prov.models[0] || (isManus ? 'standard' : '');
+      const model = isManus ? (MANUS_MODELS.includes(rawModel) ? rawModel : 'standard') : rawModel;
       if (!model) {
         lastError = new Error(`هیچ مدلی برای ارائه‌دهنده ${prov.name} تعریف نشده است.`);
         break;
       }
-      const url = applyCorsProxy(`${prov.baseUrl.replace(/\/+$/, '')}/chat/completions`);
       const attemptStart = performance.now();
       let ttftMs = null;
 
       try {
+        if (isManus) {
+          let prevStreamText = '';
+          let prevStreamThinking = '';
+          const manusOut = await runManusTask({
+            provider: prov,
+            apiKey: key ? key.value : '',
+            model,
+            messages,
+            existingTaskId: manusTaskId || '',
+            corsProxy: store.state.settings.corsProxy || '',
+            ...(typeof pollIntervalMs === 'number' ? { pollIntervalMs } : {}),
+            signal,
+            onManusUpdate,
+            onMeta: (m) => {
+              if (typeof m?.ttftMs === 'number' && ttftMs === null) {
+                ttftMs = m.ttftMs;
+              }
+              if (!m?.done) {
+                onMeta?.({
+                  providerName: prov.name,
+                  modelId: model,
+                  ttftMs: ttftMs ?? Math.round(performance.now() - attemptStart),
+                  totalMs: null,
+                  tokensOut: 0,
+                  tokPerSec: 0,
+                  done: false,
+                });
+              }
+            },
+            onStream: (text, thinking) => {
+              if (ttftMs === null && (text || thinking)) {
+                ttftMs = Math.round(performance.now() - attemptStart);
+              }
+              if (thinking && thinking !== prevStreamThinking) {
+                prevStreamThinking = thinking;
+                onStream?.({ type: 'thinking', thinking, text: text || '' });
+              }
+              if (text && text !== prevStreamText) {
+                const delta = text.startsWith(prevStreamText) ? text.slice(prevStreamText.length) : text;
+                prevStreamText = text;
+                onStream?.({ type: 'delta', delta, text, thinking: thinking || '' });
+              }
+            },
+          });
+
+          const totalMs = Math.round(performance.now() - t0);
+          if (ttftMs === null) ttftMs = manusOut.ttftMs ?? totalMs;
+          const hasApiUsage = Boolean(
+            manusOut.usage &&
+              (typeof manusOut.usage.prompt_tokens === 'number' ||
+                typeof manusOut.usage.completion_tokens === 'number'),
+          );
+          const estIn = estimateInputTokens(messages);
+          const estOut = Math.ceil(((manusOut.text || '').length + (manusOut.thinking || '').length) / 4);
+          const tokensIn = typeof manusOut.usage?.prompt_tokens === 'number' ? manusOut.usage.prompt_tokens : estIn;
+          const tokensOut =
+            typeof manusOut.usage?.completion_tokens === 'number' ? manusOut.usage.completion_tokens : estOut;
+          const totalTokens =
+            typeof manusOut.usage?.total_tokens === 'number' ? manusOut.usage.total_tokens : tokensIn + tokensOut;
+          const estimated = !hasApiUsage;
+          const tokPerSec = Math.round((tokensOut / Math.max(0.05, totalMs / 1000)) * 10) / 10;
+
+          const meta = {
+            providerName: prov.name,
+            modelId: model,
+            ttftMs,
+            totalMs,
+            tokensIn,
+            tokensOut,
+            totalTokens,
+            estimated,
+            tokPerSec,
+            done: true,
+          };
+          onMeta?.(meta);
+
+          if (key) {
+            key.lastUsedAt = Date.now();
+            key.tokens = (key.tokens || 0) + totalTokens;
+            key.failures = 0;
+            key.status = 'active';
+          }
+          store.addUsageEvent({
+            ts: Date.now(),
+            providerId: prov.id,
+            providerName: prov.name,
+            model,
+            tokensIn,
+            tokensOut,
+            totalTokens,
+            estimated,
+          });
+
+          return {
+            text: manusOut.text,
+            thinking: manusOut.thinking,
+            provider: prov.name,
+            providerName: prov.name,
+            model,
+            modelId: model,
+            tokens: totalTokens,
+            tokensIn,
+            tokensOut,
+            totalTokens,
+            estimated,
+            elapsedMs: totalMs,
+            totalMs,
+            ttftMs,
+            tokPerSec,
+            meta,
+            manusTaskId: manusOut.taskId,
+            manusStatus: manusOut.status,
+            manusPlan: manusOut.planSteps,
+            manusTools: manusOut.toolEvents,
+            attachments: manusOut.attachments,
+            images: manusOut.images,
+            questionOptions: manusOut.questionOptions,
+          };
+        }
+
+        const url = applyCorsProxy(`${prov.baseUrl.replace(/\/+$/, '')}/chat/completions`);
         const headers = { 'Content-Type': 'application/json' };
         if (!isNoKey && key) {
           headers.Authorization = `Bearer ${key.value}`;
