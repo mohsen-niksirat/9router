@@ -79,12 +79,45 @@ function getActiveTargetLabel() {
   return c ? `کمبو: ${c.name}` : 'انتخاب نشده';
 }
 
+const APISFREELLM_DAILY_LIMIT = 10_000_000;
+
+function formatCompactTokens(n) {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2).replace(/\.00$/, '')}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, '')}K`;
+  return String(Math.max(0, Math.round(n)));
+}
+
+function updateFreeQuotaPill() {
+  const el = document.getElementById('free-quota-pill');
+  if (!el) return;
+  const t = store.state.activeTarget;
+  const isFree = t && t.type === 'provider' && t.id === 'prov_apisfreellm';
+  if (!isFree) {
+    el.hidden = true;
+    return;
+  }
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const cutoff = startOfDay.getTime();
+  const used = (store.state.usageEvents || []).reduce((sum, ev) => {
+    if (ev && ev.providerId === 'prov_apisfreellm' && Number(ev.ts) >= cutoff) {
+      return sum + (Number(ev.totalTokens) || 0);
+    }
+    return sum;
+  }, 0);
+  const remaining = Math.max(0, APISFREELLM_DAILY_LIMIT - used);
+  el.textContent = `⚡ مانده امروز: ${formatCompactTokens(remaining)} / 10M`;
+  el.classList.toggle('low', remaining < 1_000_000);
+  el.hidden = false;
+}
+
 function updateTargetPill() {
   const label = getActiveTargetLabel();
   const topEl = document.getElementById('active-target-label');
   const quickEl = document.getElementById('quick-model-label');
   if (topEl) topEl.textContent = label;
   if (quickEl) quickEl.textContent = label;
+  updateFreeQuotaPill();
 }
 
 function updateQuickParamsLabel() {

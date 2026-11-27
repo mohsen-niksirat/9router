@@ -439,6 +439,30 @@ textarea:focus-visible, input:focus-visible { outline: 2px solid var(--focus-rin
 .prev-chip { position: relative; }
 .prev-chip img { width: 52px; height: 52px; object-fit: cover; border-radius: 10px; }
 .prev-chip button { position: absolute; top: -5px; right: -5px; width: 18px; height: 18px; border-radius: 50%; background: var(--text); color: var(--bg); font-size: 11px; }
+.free-quota-pill {
+  cursor: default;
+  border-color: rgba(34, 197, 94, 0.35);
+  color: #4ade80;
+  background: rgba(34, 197, 94, 0.08);
+  font-variant-numeric: tabular-nums;
+}
+.light-mode .free-quota-pill {
+  color: #15803d;
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(21, 128, 61, 0.3);
+}
+.free-quota-pill.low {
+  border-color: rgba(239, 68, 68, 0.45);
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.1);
+}
+.light-mode .free-quota-pill.low {
+  color: #b91c1c;
+}
+.free-quota-pill[hidden] {
+  display: none;
+}
+
 .composer-row { display: flex; align-items: flex-end; gap: 8px; }
 .composer-row textarea { flex: 1; resize: none; min-height: 26px; max-height: 160px; padding: 4px 6px; font-size: 14.5px; }
 .mode-pill {
