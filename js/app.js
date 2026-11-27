@@ -401,6 +401,201 @@ function renderSessionsSidebar(filter = '') {
   });
 }
 
+function getManusToolIcon(toolName = '') {
+  const t = String(toolName || '').toLowerCase();
+  if (/browser|web|url|page|navigate|click|scroll|crawl|http/.test(t)) return '🌐';
+  if (/bash|shell|terminal|exec|python|node|code|cmd|command|script/.test(t)) return '💻';
+  if (/file|folder|dir|path|read|write|edit|replace|view|save|download|upload|pdf|doc|slide|image/.test(t)) return '📁';
+  if (/search|find|grep|query|lookup|research/.test(t)) return '🔍';
+  return '🛠';
+}
+
+function getManusFileIcon(att = {}) {
+  const ct = String(att.contentType || '').toLowerCase();
+  const name = String(att.filename || '').toLowerCase();
+  if (att.isImage || ct.startsWith('image/')) return '🖼';
+  if (ct.includes('audio') || /\.(mp3|wav|ogg|m4a|flac)$/.test(name)) return '🎵';
+  if (ct.includes('zip') || ct.includes('tar') || ct.includes('compressed') || /\.(zip|tar|gz|tgz|rar|7z)$/.test(name)) return '📦';
+  if (ct.includes('presentation') || ct.includes('spreadsheet') || ct.includes('csv') || /\.(pptx?|xlsx?|csv|key)$/.test(name)) return '📊';
+  return '📄';
+}
+
+function isSafeMediaUrl(url) {
+  return /^(https?:\/\/|data:image\/|blob:)/i.test(String(url || '').trim());
+}
+
+function isSafeDownloadUrl(url) {
+  return /^(https?:\/\/|data:|blob:)/i.test(String(url || '').trim());
+}
+
+function renderManusWorkspaceHtml({ planSteps, toolEvents, status, isLive = false } = {}) {
+  const steps = Array.isArray(planSteps) ? planSteps : [];
+  const tools = Array.isArray(toolEvents) ? toolEvents : [];
+  const cleanStatus = String(status || '').trim();
+  if (!steps.length && !tools.length && !cleanStatus) return '';
+
+  const stLower = cleanStatus.toLowerCase();
+  const isTerminal = ['completed', 'done', 'stopped', 'waiting', 'failed', 'error'].includes(stLower);
+  const isRunning = isLive ? !isTerminal : ['running', 'pending', 'in_progress'].includes(stLower);
+  const isError = stLower === 'failed' || stLower === 'error';
+
+  const headerTitle = isRunning
+    ? '🤖 اجرای ایجنت Manus'
+    : '✓ مراحل اجرای Manus';
+
+  const totalCount = steps.length ? steps.length : tools.length;
+  const doneCount = steps.length
+    ? steps.filter((s) => s?.status === 'done').length
+    : tools.filter((t) => t?.status === 'done').length;
+  const stepBadgeHtml = `<span class="manus-step-badge">${doneCount}/${totalCount} مرحله</span>`;
+
+  const planHtml = steps.length
+    ? `<ul class="manus-plan-list">${steps
+        .map((step) => {
+          const st = step?.status === 'done' ? 'done' : step?.status === 'in_progress' ? 'in_progress' : 'todo';
+          const iconHtml =
+            st === 'done'
+              ? '<span class="manus-step-icon done" aria-hidden="true">✓</span>'
+              : st === 'in_progress'
+              ? '<span class="manus-step-icon in-progress" aria-hidden="true"><span class="manus-pulse-dot"></span></span>'
+              : '<span class="manus-step-icon todo" aria-hidden="true">○</span>';
+          return `<li class="manus-plan-item ${st}">${iconHtml}<span class="manus-step-title">${escHtml(step?.title || '')}</span></li>`;
+        })
+        .join('')}</ul>`
+    : '';
+
+  const toolsHtml = tools.length
+    ? `<div class="manus-tool-list">${tools
+        .map((ev) => {
+          const st = ev?.status === 'error' ? 'error' : ev?.status === 'in_progress' ? 'in_progress' : 'done';
+          const icon = getManusToolIcon(ev?.tool);
+          return `<div class="manus-tool-item ${st}">
+            <span class="manus-tool-badge" aria-hidden="true">${icon}</span>
+            <span class="manus-tool-name ltr-code">${escHtml(ev?.tool || 'tool')}</span>
+            ${ev?.brief ? `<span class="manus-tool-brief" title="${escHtml(ev.brief)}">${escHtml(ev.brief)}</span>` : ''}
+          </div>`;
+        })
+        .join('')}</div>`
+    : '';
+
+  const pendingHtml =
+    !steps.length && !tools.length && isRunning
+      ? '<div class="manus-starting-hint">در حال راه‌اندازی سندباکس و دریافت مراحل اجرای Manus...</div>'
+      : '';
+
+  return `<details class="manus-workspace ${isRunning ? 'is-running' : ''} ${isError ? 'is-error' : ''}" open>
+    <summary class="manus-workspace-head">
+      <span class="manus-head-main">
+        <span class="manus-status-dot ${isRunning ? 'running' : isError ? 'error' : 'done'}" aria-hidden="true"></span>
+        <span class="manus-head-title">${headerTitle}</span>
+      </span>
+      <span class="manus-head-meta">
+        ${stepBadgeHtml}
+        <span class="manus-head-chev" aria-hidden="true">▾</span>
+      </span>
+    </summary>
+    <div class="manus-workspace-body">${pendingHtml}${planHtml}${toolsHtml}</div>
+  </details>`;
+}
+
+function renderManusGalleryHtml(images, renderedBody = '') {
+  const list = Array.isArray(images) ? images : [];
+  if (!list.length) return '';
+
+  const seenUrls = new Set();
+  const cards = [];
+  for (const raw of list) {
+    const item = typeof raw === 'string' ? { url: raw, filename: 'manus-image.png' } : (raw || {});
+    const url = String(item.url || '').trim();
+    if (!isSafeMediaUrl(url) || seenUrls.has(url)) continue;
+    const escapedUrl = escHtml(url);
+    if (renderedBody && renderedBody.includes(`<img`) && renderedBody.includes(`src="${escapedUrl}"`)) {
+      continue;
+    }
+    seenUrls.add(url);
+    const filename = String(item.filename || 'manus-image.png').trim();
+    cards.push(`<button class="manus-gallery-card" type="button" data-manus-img-preview="${escapedUrl}" data-manus-img-name="${escHtml(filename)}" title="مشاهده تصویر در اندازه کامل">
+      <img class="manus-gallery-img" src="${escapedUrl}" alt="${escHtml(filename)}" loading="lazy">
+      <span class="manus-gallery-caption">
+        <span class="manus-gallery-name ltr-code">${escHtml(filename)}</span>
+        <span class="manus-gallery-zoom" aria-hidden="true">🔍 بزرگ‌نمایی</span>
+      </span>
+    </button>`);
+  }
+
+  return cards.length ? `<div class="manus-image-gallery">${cards.join('')}</div>` : '';
+}
+
+function renderManusFilesHtml(attachments) {
+  const list = Array.isArray(attachments) ? attachments : [];
+  if (!list.length) return '';
+
+  const itemsHtml = list
+    .map((att) => {
+      if (!att || typeof att !== 'object') return '';
+      const filename = String(att.filename || 'file').trim();
+      const contentType = String(att.contentType || att.type || 'application/octet-stream').trim();
+      const url = String(att.url || '').trim();
+      const cover = String(att.coverImage || '').trim();
+      const thumbSrc = isSafeMediaUrl(cover)
+        ? cover
+        : (att.isImage && isSafeMediaUrl(url) ? url : '');
+      const thumbHtml = thumbSrc
+        ? `<img class="manus-file-thumb" src="${escHtml(thumbSrc)}" alt="${escHtml(filename)}" loading="lazy">`
+        : `<span class="manus-file-icon" aria-hidden="true">${getManusFileIcon(att)}</span>`;
+      const dlBtnHtml = isSafeDownloadUrl(url)
+        ? `<button class="btn btn-sm manus-file-dl-btn" type="button" data-file-download-url="${escHtml(url)}" data-file-download-name="${escHtml(filename)}">⬇ دانلود فایل</button>`
+        : '';
+
+      return `<div class="manus-file-card">
+        <div class="manus-file-thumb-wrap">${thumbHtml}</div>
+        <div class="manus-file-info">
+          <div class="manus-file-name ltr-code" title="${escHtml(filename)}">${escHtml(filename)}</div>
+          <span class="manus-file-badge ltr-code">${escHtml(contentType)}</span>
+        </div>
+        ${dlBtnHtml}
+      </div>`;
+    })
+    .filter(Boolean)
+    .join('');
+
+  return itemsHtml ? `<div class="manus-files-list">${itemsHtml}</div>` : '';
+}
+
+function openManusImageModal(url, filename = 'manus-image.png') {
+  if (!isSafeMediaUrl(url)) return;
+  let modalBg = document.getElementById('manus-img-lightbox');
+  if (!modalBg) {
+    modalBg = document.createElement('div');
+    modalBg.className = 'modal-bg manus-lightbox-bg';
+    modalBg.id = 'manus-img-lightbox';
+    modalBg.addEventListener('click', (ev) => {
+      if (ev.target === modalBg || ev.target.closest('[data-close-modal]')) {
+        modalBg.classList.remove('open');
+      }
+    });
+    document.body.appendChild(modalBg);
+  }
+  const safeUrl = escHtml(url);
+  const safeName = escHtml(filename || 'manus-image.png');
+  modalBg.innerHTML = `
+    <div class="modal manus-lightbox-modal" role="dialog" aria-modal="true" aria-label="${safeName}">
+      <div class="manus-lightbox-head">
+        <span class="manus-lightbox-title ltr-code" title="${safeName}">${safeName}</span>
+        <div class="manus-lightbox-acts">
+          <button class="btn btn-sm btn-amber" type="button" data-file-download-url="${safeUrl}" data-file-download-name="${safeName}">⬇ دانلود فایل</button>
+          <a class="btn btn-sm btn-ghost" href="${safeUrl}" target="_blank" rel="noopener noreferrer">↗ تب جدید</a>
+          <button class="btn btn-sm btn-ghost" type="button" data-close-modal>بستن ×</button>
+        </div>
+      </div>
+      <div class="manus-lightbox-body">
+        <img class="manus-lightbox-img" src="${safeUrl}" alt="${safeName}">
+      </div>
+    </div>
+  `;
+  modalBg.classList.add('open');
+}
+
 function renderTelemetryBadge(m) {
   const meta = m.meta || {};
   const prov = meta.providerName || m.provider || '';
@@ -472,6 +667,12 @@ function buildMessageHtml(m, idx) {
       </div>`;
   }
 
+  const manusWorkspaceHtml = renderManusWorkspaceHtml({
+    planSteps: m.manusPlan,
+    toolEvents: m.manusTools,
+    status: m.manusStatus,
+    isLive: false,
+  });
   const thinkLabel = m.thinkingMs
     ? `تفکر برای ${(m.thinkingMs / 1000).toFixed(1)} ثانیه`
     : 'فرایند تفکر مدل';
@@ -485,10 +686,22 @@ function buildMessageHtml(m, idx) {
   const imgHtml = m.imageUrl
     ? `<img class="gen-img" src="${m.imageUrl}" alt="تصویر تولیدشده"><a class="btn btn-sm btn-ghost" style="margin-top:8px" href="${m.imageUrl}" download="9router-image.png" target="_blank" rel="noopener noreferrer">⬇️ دانلود تصویر</a>`
     : '';
+  const manusGalleryHtml = renderManusGalleryHtml(m.generatedImages || m.images, renderedBody);
+  const manusFilesHtml = renderManusFilesHtml(m.attachments);
   const telemetryHtml = renderTelemetryBadge(m);
-  const followUpsHtml = m.followUps?.length
-    ? `<div class="followups-bar" role="region" aria-label="سوالات پیشنهادی بعدی">${m.followUps
-        .map((q) => `<button class="followup-chip" type="button" data-followup="${escHtml(q)}">↳ ${escHtml(q)}</button>`)
+  const chipItems = [
+    ...(Array.isArray(m.questionOptions)
+      ? m.questionOptions.map((opt) => ({ text: opt, isQuestion: true }))
+      : []),
+    ...(Array.isArray(m.followUps)
+      ? m.followUps.map((q) => ({ text: q, isQuestion: false }))
+      : []),
+  ];
+  const followUpsHtml = chipItems.length
+    ? `<div class="followups-bar" role="region" aria-label="گزینه‌ها و سوالات پیشنهادی">${chipItems
+        .map((item) =>
+          `<button class="followup-chip ${item.isQuestion ? 'manus-question-chip' : ''}" type="button" data-followup="${escHtml(item.text)}">${item.isQuestion ? '💬' : '↳'} ${escHtml(item.text)}</button>`
+        )
         .join('')}</div>`
     : '';
 
@@ -496,7 +709,7 @@ function buildMessageHtml(m, idx) {
     <div class="msg ai" data-msg-index="${idx}">
       <div class="ai-wrap">
         <div class="ai-av" aria-hidden="true">9R</div>
-        <div class="bubble">${sourcesHtml}${thinkHtml}${renderedBody}${imgHtml}</div>
+        <div class="bubble">${sourcesHtml}${manusWorkspaceHtml}${thinkHtml}${renderedBody}${imgHtml}${manusGalleryHtml}${manusFilesHtml}</div>
       </div>
       <div class="msg-footer">
         ${telemetryHtml}
@@ -675,6 +888,14 @@ async function streamAssistantResponse({ isImage = false, imagePrompt = '', sour
   let latestAcc = '';
   let liveMeta = null;
   let webSources = [];
+  let liveManusState = {
+    status: '',
+    planSteps: [],
+    toolEvents: [],
+    attachments: [],
+    images: [],
+    questionOptions: [],
+  };
 
   const stopThinkTimer = () => {
     if (thinkTimerId) {
@@ -688,6 +909,12 @@ async function streamAssistantResponse({ isImage = false, imagePrompt = '', sour
 
   const renderLiveBubble = () => {
     const sourcesHtml = webSources.length ? renderSourceCardsHtml(webSources) : '';
+    const manusWorkspaceHtml = renderManusWorkspaceHtml({
+      planSteps: liveManusState.planSteps,
+      toolEvents: liveManusState.toolEvents,
+      status: liveManusState.status,
+      isLive: true,
+    });
     let thinkHtml = '';
     if (latestThinking) {
       const elapsedSec = thinkStartMs
@@ -702,7 +929,9 @@ async function streamAssistantResponse({ isImage = false, imagePrompt = '', sour
     const bodyHtml = webSources.length
       ? linkifyCitations(renderMarkdown(latestAcc || ''), webSources)
       : renderMarkdown(latestAcc || '');
-    bubbleEl.innerHTML = `${sourcesHtml}${thinkHtml}${bodyHtml} ▌`;
+    const manusGalleryHtml = renderManusGalleryHtml(liveManusState.images, bodyHtml);
+    const manusFilesHtml = renderManusFilesHtml(liveManusState.attachments);
+    bubbleEl.innerHTML = `${sourcesHtml}${manusWorkspaceHtml}${thinkHtml}${bodyHtml} ▌${manusGalleryHtml}${manusFilesHtml}`;
     scrollBottom(false);
   };
 
@@ -796,10 +1025,25 @@ async function streamAssistantResponse({ isImage = false, imagePrompt = '', sour
 
       const res = await runChatCompletion({
         messages: apiMessages,
+        manusTaskId: ses.manusTaskId || '',
         signal: activeAbort.signal,
         onMeta: (meta) => {
           liveMeta = meta;
           metaEl.innerHTML = renderTelemetryBadge({ meta });
+        },
+        onManusUpdate: (upd = {}) => {
+          if (upd.taskId) {
+            ses.manusTaskId = upd.taskId;
+          }
+          liveManusState = {
+            status: upd.manusStatus || upd.status || liveManusState.status || 'running',
+            planSteps: Array.isArray(upd.planSteps) ? upd.planSteps : liveManusState.planSteps,
+            toolEvents: Array.isArray(upd.toolEvents) ? upd.toolEvents : liveManusState.toolEvents,
+            attachments: Array.isArray(upd.attachments) ? upd.attachments : liveManusState.attachments,
+            images: Array.isArray(upd.images) ? upd.images : liveManusState.images,
+            questionOptions: Array.isArray(upd.questionOptions) ? upd.questionOptions : liveManusState.questionOptions,
+          };
+          renderLiveBubble();
         },
         onStream: ({ type, text: acc, thinking }) => {
           latestThinking = thinking || latestThinking;
@@ -818,6 +1062,9 @@ async function streamAssistantResponse({ isImage = false, imagePrompt = '', sour
       });
 
       stopThinkTimer();
+      if (res.manusTaskId) {
+        ses.manusTaskId = res.manusTaskId;
+      }
       const { cleanText, followUps } = webSources.length
         ? extractFollowUps(res.text || '')
         : { cleanText: res.text || '', followUps: [] };
@@ -831,6 +1078,16 @@ async function streamAssistantResponse({ isImage = false, imagePrompt = '', sour
         tokPerSec: res.tokPerSec ?? null,
       };
 
+      const isManusResp = Boolean(
+        res.manusTaskId ||
+          res.manusStatus ||
+          res.manusPlan?.length ||
+          res.manusTools?.length ||
+          res.attachments?.length ||
+          res.images?.length ||
+          res.questionOptions?.length
+      );
+
       const aiMsg = {
         role: 'assistant',
         content: cleanText,
@@ -843,6 +1100,18 @@ async function streamAssistantResponse({ isImage = false, imagePrompt = '', sour
         tokens: res.tokensOut ?? res.tokens,
         elapsedMs: res.totalMs ?? res.elapsedMs,
         meta: finalMeta,
+        ...(isManusResp
+          ? {
+              manusPlan: Array.isArray(res.manusPlan) ? res.manusPlan : liveManusState.planSteps,
+              manusTools: Array.isArray(res.manusTools) ? res.manusTools : liveManusState.toolEvents,
+              manusStatus: res.manusStatus || liveManusState.status || 'completed',
+              attachments: Array.isArray(res.attachments) ? res.attachments : liveManusState.attachments,
+              generatedImages: Array.isArray(res.images) ? res.images : liveManusState.images,
+              questionOptions: Array.isArray(res.questionOptions)
+                ? res.questionOptions
+                : liveManusState.questionOptions,
+            }
+          : {}),
       };
       ses.messages.push(aiMsg);
       ses.updatedAt = Date.now();
@@ -1218,8 +1487,56 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('topbar-target-pill')?.addEventListener('click', () => switchTab('combos'));
   document.getElementById('btn-add-api-key')?.addEventListener('click', () => switchTab('providers'));
 
-  // Delegated handler for markdown code block actions (copy & wrap toggle)
-  document.addEventListener('click', (e) => {
+  // Delegated handler for markdown code block actions, Manus file downloads & image preview
+  document.addEventListener('click', async (e) => {
+    const dlBtn = e.target.closest?.('[data-file-download-url]');
+    if (dlBtn) {
+      e.preventDefault();
+      const rawUrl = dlBtn.dataset.fileDownloadUrl || '';
+      const filename = dlBtn.dataset.fileDownloadName || 'download';
+      if (!isSafeDownloadUrl(rawUrl) || dlBtn.dataset.downloading === '1') return;
+      dlBtn.dataset.downloading = '1';
+      const origText = dlBtn.textContent;
+      dlBtn.textContent = '⏳ دریافت...';
+      try {
+        const resp = await fetch(rawUrl);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const blob = await resp.blob();
+        const objUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = objUrl;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(objUrl), 15000);
+        toast(`فایل «${filename}» دانلود شد`);
+      } catch {
+        const a = document.createElement('a');
+        a.href = rawUrl;
+        a.download = filename;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      } finally {
+        delete dlBtn.dataset.downloading;
+        dlBtn.textContent = origText;
+      }
+      return;
+    }
+
+    const imgPrevBtn = e.target.closest?.('[data-manus-img-preview]');
+    if (imgPrevBtn) {
+      e.preventDefault();
+      openManusImageModal(
+        imgPrevBtn.dataset.manusImgPreview || '',
+        imgPrevBtn.dataset.manusImgName || 'manus-image.png'
+      );
+      return;
+    }
+
     const copyBtn = e.target.closest?.('[data-code-copy]');
     if (copyBtn) {
       const code = copyBtn.closest('.code-wrap')?.querySelector('code')?.textContent || '';
@@ -1611,6 +1928,7 @@ document.addEventListener('DOMContentLoaded', () => {
         apiKey: activeKey,
         corsProxy: store.state.settings.corsProxy || '',
         noKey: Boolean(document.getElementById('m-prov-nokey')?.checked),
+        provider: prov,
       });
       fetchedProvModels = models;
       if (!models.length) {

@@ -1,4 +1,4 @@
-const CACHE = '9router-web-v11';
+const CACHE = '9router-web-v12';
 const ASSETS = [
   './',
   './index.html',
@@ -6,6 +6,7 @@ const ASSETS = [
   './js/app.js',
   './js/store.js',
   './js/router.js',
+  './js/manus.js',
   './js/markdown.js',
   './js/providers_ui.js',
   './js/combo_graph.js',
