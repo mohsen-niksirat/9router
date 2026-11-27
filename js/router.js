@@ -18,19 +18,66 @@ function isLocalProvider(prov) {
   return Boolean(prov?.noKey) || isLocalUrl(prov?.baseUrl);
 }
 
+function getMessageCharLength(m) {
+  if (!m) return 0;
+  if (typeof m.content === 'string') return m.content.length;
+  if (Array.isArray(m.content)) {
+    let chars = 0;
+    for (const part of m.content) {
+      if (typeof part === 'string') chars += part.length;
+      else if (typeof part?.text === 'string') chars += part.text.length;
+    }
+    return chars;
+  }
+  return 0;
+}
+
+/**
+ * Preserve all system messages and keep the most recent complete turns within `maxChars`.
+ * Always retains at least the latest non-system message so the active prompt is never dropped.
+ */
+export function trimHistoryToBudget(messages, maxChars = 24000) {
+  if (!Array.isArray(messages) || !messages.length) return [];
+  const budget = Math.max(0, Number(maxChars) || 0);
+  const systemMsgs = [];
+  const convoMsgs = [];
+
+  for (const m of messages) {
+    if (!m) continue;
+    if (m.role === 'system') systemMsgs.push(m);
+    else convoMsgs.push(m);
+  }
+
+  if (!convoMsgs.length) return systemMsgs;
+
+  let usedChars = systemMsgs.reduce((sum, m) => sum + getMessageCharLength(m), 0);
+  const kept = [];
+
+  for (let i = convoMsgs.length - 1; i >= 0; i--) {
+    const msg = convoMsgs[i];
+    const len = getMessageCharLength(msg);
+    if (kept.length === 0 || usedChars + len <= budget) {
+      kept.push(msg);
+      usedChars += len;
+    } else {
+      break;
+    }
+  }
+
+  kept.reverse();
+  // Drop a leading orphan assistant message when older turns were trimmed so turns stay complete
+  if (kept.length > 1 && kept.length < convoMsgs.length && kept[0]?.role === 'assistant') {
+    kept.shift();
+  }
+
+  return [...systemMsgs, ...kept];
+}
+
 function estimateInputTokens(messages) {
   if (!Array.isArray(messages)) return 0;
   let chars = 0;
   for (const m of messages) {
-    if (!m) continue;
-    if (typeof m.content === 'string') {
-      chars += m.content.length;
-    } else if (Array.isArray(m.content)) {
-      for (const part of m.content) {
-        if (typeof part === 'string') chars += part.length;
-        else if (typeof part?.text === 'string') chars += part.text.length;
-      }
-    }
+    chars += getMessageCharLength(m);
   }
   return Math.ceil(chars / 4);
 }
@@ -354,6 +401,8 @@ export async function runChatCompletion({
     throw new Error('هیچ ارائه‌دهنده یا کمبویی انتخاب نشده است. از بخش Providers & Keys کلید اضافه کنید.');
   }
 
+  const budgetedMessages = trimHistoryToBudget(messages);
+
   let lastError = null;
   for (const entry of entries) {
     const prov = entry.provider;
@@ -435,7 +484,7 @@ export async function runChatCompletion({
               (typeof manusOut.usage.prompt_tokens === 'number' ||
                 typeof manusOut.usage.completion_tokens === 'number'),
           );
-          const estIn = estimateInputTokens(messages);
+          const estIn = estimateInputTokens(budgetedMessages);
           const estOut = Math.ceil(((manusOut.text || '').length + (manusOut.thinking || '').length) / 4);
           const tokensIn = typeof manusOut.usage?.prompt_tokens === 'number' ? manusOut.usage.prompt_tokens : estIn;
           const tokensOut =
@@ -515,7 +564,7 @@ export async function runChatCompletion({
             headers,
             body: JSON.stringify({
               model,
-              messages,
+              messages: budgetedMessages,
               temperature:
                 typeof temperature === 'number' && !Number.isNaN(temperature)
                   ? temperature
@@ -577,7 +626,7 @@ export async function runChatCompletion({
           out.usage &&
           (typeof out.usage.prompt_tokens === 'number' || typeof out.usage.completion_tokens === 'number')
         );
-        const estIn = estimateInputTokens(messages);
+        const estIn = estimateInputTokens(budgetedMessages);
         const estOut = Math.ceil((out.text.length + out.thinking.length) / 4);
         const tokensIn = typeof out.usage?.prompt_tokens === 'number' ? out.usage.prompt_tokens : estIn;
         const tokensOut = typeof out.usage?.completion_tokens === 'number' ? out.usage.completion_tokens : estOut;

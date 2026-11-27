@@ -714,6 +714,9 @@ function buildMessageHtml(m, idx) {
       <div class="msg-footer">
         ${telemetryHtml}
         <div class="msg-actions" role="toolbar" aria-label="عملیات پاسخ دستیار">
+          <button class="msg-act-btn" type="button" data-action="summarize" data-msg-index="${idx}" title="خلاصه‌سازی این پاسخ">📝 خلاصه</button>
+          <button class="msg-act-btn" type="button" data-action="translate" data-msg-index="${idx}" title="ترجمه فارسی این پاسخ">🌐 ترجمه</button>
+          <button class="msg-act-btn" type="button" data-action="continue" data-msg-index="${idx}" title="ادامه دادن این پاسخ">▶️ ادامه</button>
           <button class="msg-act-btn" type="button" data-action="regen" data-msg-index="${idx}" title="تولید مجدد پاسخ">↻ بازتولید</button>
           <button class="msg-act-btn" type="button" data-action="fork" data-msg-index="${idx}" title="انشعاب گفتگوی جدید از این پیام">⑂ انشعاب</button>
           <button class="msg-act-btn" type="button" data-action="copy" data-msg-index="${idx}" title="کپی مارک‌داون خام">📋 کپی</button>
@@ -1666,6 +1669,32 @@ document.addEventListener('DOMContentLoaded', () => {
       store.save();
       renderChatMessages(true);
       await streamAssistantResponse({ isImage: false });
+    } else if (action === 'summarize' || action === 'translate' || action === 'continue') {
+      if (activeAbort) return toast('ابتدا تولید پاسخ را متوقف کنید');
+      const msg = ses.messages[idx];
+      if (!msg) return;
+      const isLastMsg = idx === ses.messages.length - 1;
+      const snippet = String(msg.content || '').trim().slice(0, 3000);
+      let quickPrompt = '';
+      if (action === 'summarize') {
+        quickPrompt = isLastMsg
+          ? 'لطفاً پاسخ قبلی را به‌صورت خلاصه و نکته‌ای (بولت‌پوینت) به فارسی جمع‌بندی کن.'
+          : `لطفاً متن زیر را به‌صورت خلاصه و نکته‌ای (بولت‌پوینت) به فارسی جمع‌بندی کن:\n\n${snippet}`;
+      } else if (action === 'translate') {
+        quickPrompt = isLastMsg
+          ? 'لطفاً پاسخ قبلی را به فارسی روان و حرفه‌ای ترجمه کن.'
+          : `لطفاً متن زیر را به فارسی روان و حرفه‌ای ترجمه کن:\n\n${snippet}`;
+      } else {
+        quickPrompt = isLastMsg
+          ? 'لطفاً پاسخ قبلی را دقیقاً از همان‌جا، بدون تکرار، ادامه بده.'
+          : `لطفاً ادامه متن زیر را دقیقاً از همان‌جا و بدون تکرار بنویس:\n\n${snippet}`;
+      }
+      const inp = document.getElementById('msg-input');
+      if (inp) {
+        inp.value = quickPrompt;
+        autoGrowInput();
+        await handleSend();
+      }
     }
   });
 

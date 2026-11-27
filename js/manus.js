@@ -778,7 +778,7 @@ export async function runManusTask({
     };
     let finalStatus = 'running';
     let taskUsage = null;
-    let pollCount = 0;
+    let pollTick = 0;
 
     while (true) {
       if (signal?.aborted) {
@@ -786,10 +786,10 @@ export async function runManusTask({
         throw createAbortError();
       }
 
-      if (pollCount > 0) {
+      if (pollTick > 0) {
         await abortableSleep(pollIntervalMs, signal);
       }
-      pollCount++;
+      pollTick++;
 
       const encodedId = encodeURIComponent(taskId);
       const [detailRes, listRes] = await Promise.all([
@@ -839,7 +839,14 @@ export async function runManusTask({
 
       onStream?.(parsed.text, parsed.thinking);
 
-      const isTerminal = TERMINAL_STATUSES.has(status);
+      const hasOutput = Boolean(
+        parsed.text ||
+          parsed.thinking ||
+          parsed.attachments.length ||
+          parsed.images.length ||
+          parsed.errorMessage,
+      );
+      const isTerminal = TERMINAL_STATUSES.has(status) && (hasOutput || pollTick >= 6);
       onMeta?.({
         providerName: provider?.name || 'Manus AI',
         modelId: agentProfile,

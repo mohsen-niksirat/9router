@@ -304,7 +304,7 @@ export function renderAnalyticsView(containerEl, store) {
     .map(
       (p) => `
       <tr>
-        <td>${escHtml(p.providerName)}</td>
+        <td>${escHtml(providerNameById.get(p.providerId) || p.providerName)}</td>
         <td dir="ltr">${formatNumber(p.requests)}</td>
         <td dir="ltr">${formatNumber(p.totalTokens)}</td>
         <td dir="ltr">${p.sharePct}%</td>
@@ -318,7 +318,7 @@ export function renderAnalyticsView(containerEl, store) {
       (m) => `
       <tr>
         <td dir="ltr"><code>${escHtml(m.model)}</code></td>
-        <td>${escHtml(m.providerName)}</td>
+        <td>${escHtml(providerNameById.get(m.providerId) || m.providerName)}</td>
         <td dir="ltr">${formatNumber(m.requests)}</td>
         <td dir="ltr">${formatNumber(m.totalTokens)}</td>
         <td dir="ltr">${m.sharePct}%</td>
