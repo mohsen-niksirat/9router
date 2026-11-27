@@ -9,6 +9,20 @@ const STORAGE_KEY = 'ninerouter_web_v1';
 
 export const BUILTIN_PROVIDERS = [
   {
+    id: 'prov_apisfreellm',
+    slug: 'apisfreellm',
+    name: 'APIsFreeLLM (رایگان)',
+    baseUrl: 'https://api.apisfreellm.com/v1',
+    defaultModel: 'free-ai',
+    models: ['free-ai'],
+    color: '#22c55e',
+    pinned: true,
+    isBuiltin: true,
+    supportsImages: false,
+    noKey: true,
+    keys: [],
+  },
+  {
     id: 'prov_openrouter',
     slug: 'openrouter',
     name: 'OpenRouter',
@@ -109,6 +123,7 @@ export const BUILTIN_PROVIDERS = [
 ];
 
 export const DEFAULT_MODEL_PRICES = {
+  'prov_apisfreellm|free-ai': { inPer1M: 0, outPer1M: 0 },
   'prov_openrouter|google/gemini-2.5-flash': { inPer1M: 0.15, outPer1M: 0.6 },
   'prov_openrouter|deepseek/deepseek-r1': { inPer1M: 0.55, outPer1M: 2.19 },
   'prov_openrouter|anthropic/claude-sonnet-4': { inPer1M: 3.0, outPer1M: 15.0 },
@@ -272,7 +287,7 @@ const DEFAULT_STATE = {
       ],
     },
   ],
-  activeTarget: { type: 'combo', id: 'combo_default' }, // { type: 'combo'|'provider', id, model?, keyId? }
+  activeTarget: { type: 'provider', id: 'prov_apisfreellm', model: 'free-ai' }, // { type: 'combo'|'provider', id, model?, keyId? }
   sessions: [],
   activeSessionId: null,
   prompts: [
